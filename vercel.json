@@ -1,6 +1,6 @@
 {
-  "buildCommand": "npx expo export -p web",
-  "outputDirectory": "dist",
+  "buildCommand": "npm run build --workspace=apps/mobile",
+  "outputDirectory": "apps/mobile/dist",
   "installCommand": "npm install --legacy-peer-deps",
   "framework": null,
   "rewrites": [
