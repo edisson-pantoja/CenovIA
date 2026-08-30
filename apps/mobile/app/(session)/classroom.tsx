@@ -29,7 +29,7 @@ import type { BoardEvent, TeacherState, UserUsage } from '@cenovia/shared';
 
 import TeacherAvatar from '../../components/TeacherAvatar/TeacherAvatar';
 import SpeakingIndicator from '../../components/TeacherAvatar/SpeakingIndicator';
-import ChalkBoard from '../../components/ChalkBoard/ChalkBoard';
+import ChalkBoardWrapper from '../../components/ChalkBoard/ChalkBoardWrapper';
 import AudioReplayPlayer from '../../components/AudioReplayPlayer';
 import UsageBanner from '../../components/UsageBanner';
 
@@ -238,7 +238,7 @@ export default function ClassroomScreen() {
 
         {/* ── Metade inferior: Quadro verde ───────────────────────── */}
         <View style={styles.boardSection}>
-          <ChalkBoard
+          <ChalkBoardWrapper
             events={boardEvents}
             replayTimeMs={replayTimeMs}
           />
