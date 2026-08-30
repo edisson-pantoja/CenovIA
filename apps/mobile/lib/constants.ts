@@ -2,7 +2,7 @@ import Constants from 'expo-constants';
 
 export const FREE_TIER_MINUTES = 30;
 
-const baseBackendUrl = Constants.expoConfig?.extra?.backendUrl || 'http://localhost:3001';
+const baseBackendUrl = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:3001';
 
 // If backendUrl is http/https, we convert to ws/wss for the websocket
 const baseWsUrl = baseBackendUrl.replace(/^http/, 'ws');
