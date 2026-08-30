@@ -1,0 +1,11 @@
+[build]
+builder = "NIXPACKS"
+
+[build.env]
+NODE_VERSION = "22"
+
+[deploy]
+startCommand = "npm run start --workspace=packages/backend"
+healthcheckPath = "/api/health"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"

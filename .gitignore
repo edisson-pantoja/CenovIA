@@ -1,0 +1,29 @@
+# Dependências
+node_modules/
+.expo/
+dist/
+
+# Ambiente
+.env
+.env.local
+.env.*.local
+packages/backend/.env
+apps/mobile/.env
+
+# Builds
+apps/mobile/dist/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# TypeScript
+*.tsbuildinfo
+
+# IDE
+.vscode/
+.idea/

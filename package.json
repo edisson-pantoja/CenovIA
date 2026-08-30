@@ -1,0 +1,22 @@
+{
+  "name": "cenovia",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CenovIA — Professora de Reforço com IA em Tempo Real",
+  "workspaces": [
+    "apps/mobile",
+    "packages/shared",
+    "packages/backend"
+  ],
+  "scripts": {
+    "mobile": "npm run start --workspace=apps/mobile",
+    "mobile:tunnel": "npm run start --workspace=apps/mobile -- --tunnel",
+    "backend": "npm run dev --workspace=packages/backend",
+    "backend:build": "npm run build --workspace=packages/backend",
+    "type-check": "tsc --noEmit -p packages/shared/tsconfig.json"
+  },
+  "engines": {
+    "node": ">=22.0.0",
+    "npm": ">=10.0.0"
+  }
+}

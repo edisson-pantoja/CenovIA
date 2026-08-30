@@ -1,0 +1,64 @@
+{
+  "levels": [
+    {
+      "id": "fundamental",
+      "name": "Ensino Fundamental",
+      "grades": [
+        {
+          "id": "fund-1",
+          "name": "1º Ano",
+          "subjects": [
+            { "id": "port", "name": "Língua Portuguesa" },
+            { "id": "mat", "name": "Matemática" },
+            { "id": "cie", "name": "Ciências" },
+            { "id": "hist", "name": "História" },
+            { "id": "geo", "name": "Geografia" },
+            { "id": "arte", "name": "Arte" },
+            { "id": "edfis", "name": "Educação Física" },
+            { "id": "ensrel", "name": "Ensino Religioso" }
+          ]
+        },
+        {
+          "id": "fund-6",
+          "name": "6º Ano",
+          "subjects": [
+            { "id": "port", "name": "Língua Portuguesa" },
+            { "id": "mat", "name": "Matemática" },
+            { "id": "cie", "name": "Ciências" },
+            { "id": "hist", "name": "História" },
+            { "id": "geo", "name": "Geografia" },
+            { "id": "arte", "name": "Arte" },
+            { "id": "edfis", "name": "Educação Física" },
+            { "id": "ing", "name": "Inglês" },
+            { "id": "ensrel", "name": "Ensino Religioso" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "medio",
+      "name": "Ensino Médio",
+      "grades": [
+        {
+          "id": "med-1",
+          "name": "1ª Série",
+          "subjects": [
+            { "id": "port", "name": "Língua Portuguesa" },
+            { "id": "mat", "name": "Matemática" },
+            { "id": "fis", "name": "Física" },
+            { "id": "qui", "name": "Química" },
+            { "id": "bio", "name": "Biologia" },
+            { "id": "hist", "name": "História" },
+            { "id": "geo", "name": "Geografia" },
+            { "id": "ing", "name": "Inglês" },
+            { "id": "fil", "name": "Filosofia" },
+            { "id": "soc", "name": "Sociologia" },
+            { "id": "arte", "name": "Arte" },
+            { "id": "edfis", "name": "Educação Física" },
+            { "id": "esp", "name": "Espanhol" }
+          ]
+        }
+      ]
+    }
+  ]
+}
