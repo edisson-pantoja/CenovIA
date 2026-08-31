@@ -28,10 +28,10 @@ import { COLORS } from '../../lib/constants';
 import type { BoardEvent, TeacherState, UserUsage } from '@cenovia/shared';
 
 import TeacherAvatar from '../../components/TeacherAvatar/TeacherAvatar';
-import SpeakingIndicator from '../../components/TeacherAvatar/SpeakingIndicator';
 import ChalkBoardWrapper from '../../components/ChalkBoard/ChalkBoardWrapper';
 import AudioReplayPlayer from '../../components/AudioReplayPlayer';
 import UsageBanner from '../../components/UsageBanner';
+import { webAudioRecorder, WebAudioRecorder } from '../../lib/audio-recorder';
 
 function ClassroomScreen() {
   const router = useRouter();
@@ -147,13 +147,22 @@ function ClassroomScreen() {
 
   const handlePTTStart = useCallback(async () => {
     if (!isConnected || usageLimitReached) return;
+
     try {
-      await audioManager.startRecording();
+      if (Platform.OS === 'web' && WebAudioRecorder.isSupported()) {
+        const ok = await webAudioRecorder.start();
+        if (!ok) {
+          Alert.alert('Permissão necessária', 'Permita o acesso ao microfone no navegador.');
+          return;
+        }
+      } else {
+        await audioManager.startRecording();
+      }
       setIsRecording(true);
       setTeacherState('listening');
-      setReplayTimeMs(undefined); // Sai do modo replay ao falar
+      setReplayTimeMs(undefined);
     } catch (err) {
-      Alert.alert('Permissão necessária', 'Habilite o microfone nas configurações do dispositivo.');
+      Alert.alert('Permissão necessária', 'Habilite o microfone nas configurações.');
     }
   }, [isConnected, usageLimitReached]);
 
@@ -162,25 +171,41 @@ function ClassroomScreen() {
     setIsRecording(false);
     setTeacherState('thinking');
 
-    const uri = await audioManager.stopRecording();
-    if (uri && geminiClient.isConnected) {
-      // Para o MVP, lemos o arquivo e enviamos como base64
-      // Em produção, implementar streaming de chunks em tempo real
-      try {
-        const response = await fetch(uri);
-        const blob = await response.blob();
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const base64 = (reader.result as string).split(',')[1];
-          geminiClient.sendAudioChunk(base64);
-          geminiClient.sendTurnComplete();
-        };
-        reader.readAsDataURL(blob);
-      } catch (err) {
-        console.error('[CLASSROOM] Erro ao enviar áudio:', err);
-        setTeacherState('idle');
+    try {
+      if (Platform.OS === 'web' && WebAudioRecorder.isSupported()) {
+        // Web: usa MediaRecorder nativo do browser
+        const result = await webAudioRecorder.stop();
+        if (result && geminiClient.isConnected) {
+          const { blob, mimeType } = result;
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const base64 = (reader.result as string).split(',')[1];
+            geminiClient.sendAudioChunk(base64, mimeType);
+            geminiClient.sendTurnComplete();
+          };
+          reader.readAsDataURL(blob);
+        } else {
+          setTeacherState('idle');
+        }
+      } else {
+        // Native (iOS/Android): usa expo-av
+        const uri = await audioManager.stopRecording();
+        if (uri && geminiClient.isConnected) {
+          const response = await fetch(uri);
+          const blob = await response.blob();
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const base64 = (reader.result as string).split(',')[1];
+            geminiClient.sendAudioChunk(base64, 'audio/pcm;rate=16000');
+            geminiClient.sendTurnComplete();
+          };
+          reader.readAsDataURL(blob);
+        } else {
+          setTeacherState('idle');
+        }
       }
-    } else {
+    } catch (err) {
+      console.error('[CLASSROOM] Erro ao enviar áudio:', err);
       setTeacherState('idle');
     }
   }, [isRecording]);

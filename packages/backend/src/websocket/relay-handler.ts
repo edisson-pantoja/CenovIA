@@ -62,13 +62,6 @@ export const handleRelayConnection = (clientWs: WebSocket, request: IncomingMess
         geminiWs.on('open', async () => {
           console.log(`[RELAY] Connected to Gemini for user ${userId}`);
           
-          const currentUsage = await UsageService.getUserUsage(userId!, new Date().toISOString().slice(0, 7));
-          clientWs.send(JSON.stringify({
-            type: 'session_ready',
-            sessionId: Math.random().toString(36).substring(7),
-            usage: currentUsage
-          }));
-          
           const systemInstruction = `Você é CenovIA, uma professora particular afetuosa, paciente e muito didática de ${context?.subjectName || 'várias matérias'} para ${context?.gradeLabel || 'o aluno'}. 
 Responda SEMPRE em português do Brasil, com linguagem clara e adequada para o nível do aluno.
 Quando explicar algo que precisa de visualização (fórmulas, diagramas, estruturas), use a função draw_board.
@@ -126,11 +119,10 @@ Seja encorajadora e positiva. Celebre quando o aluno acertar.`;
           }, 30000);
         });
 
-        geminiWs.on('message', (geminiData, geminiIsBinary) => {
+        geminiWs.on('message', async (geminiData, geminiIsBinary) => {
           if (clientWs.readyState !== WebSocket.OPEN) return;
 
           // gemini-2.5-flash-native-audio-latest envia JSON como frames BINÁRIOS.
-          // Convertemos para string e tratamos como texto em ambos os casos.
           const geminiMsgStr = Buffer.isBuffer(geminiData)
             ? (geminiData as Buffer).toString('utf8')
             : Array.isArray(geminiData)
@@ -139,6 +131,16 @@ Seja encorajadora e positiva. Celebre quando o aluno acertar.`;
 
           try {
             const geminiJson = JSON.parse(geminiMsgStr);
+
+            // Wait for Gemini to confirm setup before telling the client it's ready
+            if (geminiJson.setupComplete && userId) {
+              const currentUsage = await UsageService.getUserUsage(userId, new Date().toISOString().slice(0, 7));
+              clientWs.send(JSON.stringify({
+                type: 'session_ready',
+                sessionId: Math.random().toString(36).substring(7),
+                usage: currentUsage
+              }));
+            }
 
             // Intercept board events (function calls)
             if (geminiJson?.serverContent?.modelTurn?.parts) {
@@ -182,12 +184,13 @@ Seja encorajadora e positiva. Celebre quando o aluno acertar.`;
         });
 
       } else if (geminiWs && geminiWs.readyState === WebSocket.OPEN) {
-        // Formata a mensagem de áudio para o padrão do Gemini Live API
         if (msg.type === 'audio_chunk') {
+          // Use the mimeType from the message (webm/opus on web, pcm on native)
+          const mimeType = msg.mimeType || 'audio/pcm;rate=16000';
           const geminiFormat = {
             realtimeInput: {
               mediaChunks: [{
-                mimeType: `audio/pcm;rate=16000`,
+                mimeType,
                 data: msg.data
               }]
             }

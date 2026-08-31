@@ -91,10 +91,10 @@ export class GeminiLiveClient {
 
   // ── Envio de dados ─────────────────────────────────────────────────────────
 
-  /** Envia chunk de áudio PCM capturado do microfone (base64) */
-  sendAudioChunk(base64Audio: string): void {
+  /** Envia chunk de áudio capturado do microfone (base64) */
+  sendAudioChunk(base64Audio: string, mimeType: string = 'audio/pcm;rate=16000'): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    const msg: ClientMessage = { type: 'audio_chunk', data: base64Audio, mimeType: 'audio/pcm' };
+    const msg: ClientMessage = { type: 'audio_chunk', data: base64Audio, mimeType };
     this.ws.send(JSON.stringify(msg));
   }
 
