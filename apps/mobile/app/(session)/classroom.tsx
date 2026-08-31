@@ -212,7 +212,7 @@ function ClassroomScreen() {
       </View>
 
       {/* Banner de uso do free tier */}
-      {usage && <UsageBanner minutesRemaining={usage.minutesRemaining} minutesLimit={usage.minutesLimit} />}
+      {usage && <UsageBanner minutes={usage.minutesRemaining} />}
 
       {/* Split 50/50 */}
       <View style={styles.split}>
