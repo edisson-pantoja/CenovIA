@@ -1,46 +1,50 @@
 /**
- * WebAudioRecorder — Gravador de áudio para Web usando MediaRecorder nativo do browser.
- *
- * O expo-av não suporta gravação de forma confiável no browser.
- * Este módulo usa diretamente a API MediaRecorder do browser.
- *
- * O áudio é gravado como audio/webm;codecs=opus (suportado por Chrome/Edge/Firefox).
+ * WebAudioRecorder — Gravador de áudio para Web
+ * Captura o microfone e converte para PCM 16-bit 16kHz (Exigido pelo Gemini Live API)
  */
 
 export class WebAudioRecorder {
-  private mediaRecorder: MediaRecorder | null = null;
-  private chunks: Blob[] = [];
-  private stream: MediaStream | null = null;
+  private audioContext: AudioContext | null = null;
+  private mediaStream: MediaStream | null = null;
+  private processor: ScriptProcessorNode | null = null;
+  private pcmChunks: Int16Array[] = [];
 
-  /** Retorna true se o browser suporta gravação de áudio */
   static isSupported(): boolean {
     return (
       typeof navigator !== 'undefined' &&
       typeof navigator.mediaDevices !== 'undefined' &&
-      typeof MediaRecorder !== 'undefined'
+      (window.AudioContext || (window as any).webkitAudioContext) !== undefined
     );
   }
 
-  /** Inicia a gravação. Retorna false se o usuário negar permissão. */
   async start(): Promise<boolean> {
     try {
-      this.stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-
-      // Tenta webm/opus (Chrome/Firefox), fallback para o default do browser
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : MediaRecorder.isTypeSupported('audio/webm')
-        ? 'audio/webm'
-        : '';
-
-      this.chunks = [];
-      this.mediaRecorder = new MediaRecorder(this.stream, mimeType ? { mimeType } : undefined);
-
-      this.mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) this.chunks.push(e.data);
+      this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      // Initialize context with exactly 16000 Hz if supported (most modern browsers support this)
+      this.audioContext = new AudioContextClass({ sampleRate: 16000 });
+      
+      const source = this.audioContext.createMediaStreamSource(this.mediaStream);
+      
+      // Use ScriptProcessorNode (deprecated but works everywhere without needing external worklet files)
+      this.processor = this.audioContext.createScriptProcessor(4096, 1, 1);
+      
+      this.pcmChunks = [];
+      
+      this.processor.onaudioprocess = (e) => {
+        const inputData = e.inputBuffer.getChannelData(0);
+        // Convert Float32 [-1.0, 1.0] to Int16 [-32768, 32767]
+        const pcm16 = new Int16Array(inputData.length);
+        for (let i = 0; i < inputData.length; i++) {
+          let s = Math.max(-1, Math.min(1, inputData[i]));
+          pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        }
+        this.pcmChunks.push(pcm16);
       };
 
-      this.mediaRecorder.start();
+      source.connect(this.processor);
+      this.processor.connect(this.audioContext.destination);
       return true;
     } catch (err) {
       console.error('[WebAudioRecorder] Erro ao iniciar:', err);
@@ -48,26 +52,36 @@ export class WebAudioRecorder {
     }
   }
 
-  /** Para a gravação e retorna o Blob de áudio com o mimeType correto */
   async stop(): Promise<{ blob: Blob; mimeType: string } | null> {
-    if (!this.mediaRecorder || this.mediaRecorder.state === 'inactive') return null;
+    if (!this.processor || !this.audioContext) return null;
 
-    return new Promise((resolve) => {
-      this.mediaRecorder!.onstop = () => {
-        const mimeType = this.mediaRecorder?.mimeType || 'audio/webm';
-        const blob = new Blob(this.chunks, { type: mimeType });
-        this.cleanup();
-        resolve({ blob, mimeType });
-      };
-      this.mediaRecorder!.stop();
-    });
-  }
+    this.processor.disconnect();
+    this.processor = null;
 
-  private cleanup() {
-    this.stream?.getTracks().forEach((t) => t.stop());
-    this.stream = null;
-    this.mediaRecorder = null;
-    this.chunks = [];
+    if (this.mediaStream) {
+      this.mediaStream.getTracks().forEach(t => t.stop());
+      this.mediaStream = null;
+    }
+    
+    if (this.audioContext.state !== 'closed') {
+      await this.audioContext.close();
+    }
+    this.audioContext = null;
+
+    // Concatena os chunks PCM
+    const totalLength = this.pcmChunks.reduce((acc, chunk) => acc + chunk.length, 0);
+    const pcmData = new Int16Array(totalLength);
+    let offset = 0;
+    for (const chunk of this.pcmChunks) {
+      pcmData.set(chunk, offset);
+      offset += chunk.length;
+    }
+    this.pcmChunks = [];
+
+    // O Gemini aceita áudio PCM puro (raw data, sem cabeçalho WAV) como base64
+    // Então vamos apenas retornar os bytes puros
+    const blob = new Blob([pcmData.buffer], { type: 'audio/pcm' });
+    return { blob, mimeType: 'audio/pcm;rate=16000' };
   }
 }
 
