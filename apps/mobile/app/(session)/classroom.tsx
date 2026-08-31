@@ -220,7 +220,6 @@ function ClassroomScreen() {
         {/* ── Metade superior: Professora ─────────────────────────── */}
         <View style={styles.teacherSection}>
           <TeacherAvatar state={teacherState} />
-          <SpeakingIndicator state={teacherState} />
 
           {/* Player de replay — aparece quando há áudio gravado */}
           {audioManager.getTotalBufferedDuration() > 0 && (

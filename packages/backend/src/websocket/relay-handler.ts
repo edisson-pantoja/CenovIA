@@ -127,32 +127,46 @@ Seja encorajadora e positiva. Celebre quando o aluno acertar.`;
         });
 
         geminiWs.on('message', (geminiData, geminiIsBinary) => {
-          if (clientWs.readyState === WebSocket.OPEN) {
-            if (geminiIsBinary) {
-               clientWs.send(geminiData, { binary: true });
-            } else {
-               const geminiMsgStr = geminiData.toString();
-               try {
-                 const geminiJson = JSON.parse(geminiMsgStr);
-                 
-                 // Intercept tool calls (board events)
-                 if (geminiJson?.serverContent?.modelTurn?.parts) {
-                   const parts = geminiJson.serverContent.modelTurn.parts;
-                   for (const part of parts) {
-                     if (part.functionCall && part.functionCall.name === 'draw_board') {
-                       clientWs.send(JSON.stringify({
-                         type: 'board_event',
-                         event: part.functionCall.args
-                       }));
-                     }
-                   }
-                 }
-                 
-                 clientWs.send(geminiMsgStr);
-               } catch (e) {
-                 clientWs.send(geminiMsgStr);
-               }
+          if (clientWs.readyState !== WebSocket.OPEN) return;
+
+          // gemini-2.5-flash-native-audio-latest envia JSON como frames BINÁRIOS.
+          // Convertemos para string e tratamos como texto em ambos os casos.
+          const geminiMsgStr = Buffer.isBuffer(geminiData)
+            ? (geminiData as Buffer).toString('utf8')
+            : Array.isArray(geminiData)
+              ? Buffer.concat(geminiData as Buffer[]).toString('utf8')
+              : geminiData.toString();
+
+          try {
+            const geminiJson = JSON.parse(geminiMsgStr);
+
+            // Intercept board events (function calls)
+            if (geminiJson?.serverContent?.modelTurn?.parts) {
+              const parts = geminiJson.serverContent.modelTurn.parts;
+              for (const part of parts) {
+                if (part.functionCall && part.functionCall.name === 'draw_board') {
+                  clientWs.send(JSON.stringify({
+                    type: 'board_event',
+                    event: part.functionCall.args
+                  }));
+                }
+                // Native audio: inline PCM data inside parts
+                if (part.inlineData && part.inlineData.mimeType?.startsWith('audio/')) {
+                  clientWs.send(JSON.stringify({
+                    type: 'audio_chunk',
+                    data: part.inlineData.data,
+                    timestampMs: Date.now(),
+                    mimeType: part.inlineData.mimeType,
+                  }));
+                }
+              }
             }
+
+            // Forward the full JSON message as text to the client
+            clientWs.send(geminiMsgStr);
+          } catch (e) {
+            // If parsing fails (genuine binary audio frame), forward as-is
+            clientWs.send(geminiData as Buffer, { binary: true });
           }
         });
 
