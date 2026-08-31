@@ -1,33 +1,93 @@
-import React, { Component, ErrorInfo } from 'react';
-import { Text, View } from 'react-native';
+/**
+ * ChalkBoardWrapper.web.tsx — Versão Web pura do quadro verde
+ *
+ * Usa HTML5 Canvas diretamente (sem Skia, sem WASM) para máxima compatibilidade no navegador.
+ * O Skia continua sendo usado nas versões iOS/Android via ChalkBoard.tsx.
+ */
+import React, { useEffect, useRef } from 'react';
+import { View, StyleSheet } from 'react-native';
+import { COLORS } from '../../lib/constants';
 import type { BoardEvent } from '@cenovia/shared';
-
-// @ts-ignore
-import { WithSkiaWeb } from '@shopify/react-native-skia/lib/module/web';
-
-class ErrorBoundary extends Component<{children: React.ReactNode}, {hasError: boolean, errorMsg: string}> {
-  state = { hasError: false, errorMsg: '' };
-  static getDerivedStateFromError(error: any) { return { hasError: true, errorMsg: error?.message || 'Erro no Quadro' }; }
-  componentDidCatch(error: Error, errorInfo: ErrorInfo) { console.error("Skia Crash:", error, errorInfo); }
-  render() {
-    if (this.state.hasError) return <View style={{flex:1, justifyContent:'center', alignItems:'center'}}><Text style={{color:'red'}}>Erro ao renderizar Skia: {this.state.errorMsg}</Text></View>;
-    return this.props.children;
-  }
-}
 
 interface Props {
   events?: BoardEvent[];
   replayTimeMs?: number;
 }
 
-export default function ChalkBoardWrapper(props: Props) {
+export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  // Filtra eventos visíveis
+  const visibleEvents = replayTimeMs !== undefined
+    ? events.filter((e) => e.timestampMs <= replayTimeMs)
+    : events;
+
+  const lastClearIndex = visibleEvents.reduceRight(
+    (acc, e, idx) => (acc === -1 && e.type === 'clear' ? idx : acc),
+    -1,
+  );
+  const renderableEvents = lastClearIndex >= 0
+    ? visibleEvents.slice(lastClearIndex + 1)
+    : visibleEvents;
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Limpa e repinta o fundo verde
+    ctx.fillStyle = COLORS.CHALKBOARD_GREEN;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Fonte que imita giz
+    ctx.font = '28px "Caveat", cursive';
+    ctx.fillStyle = COLORS.CHALK_WHITE;
+
+    for (const event of renderableEvents) {
+      if (event.type === 'text') {
+        const px = (event.x ?? 0.1) * canvas.width;
+        const py = (event.y ?? 0.2) * canvas.height;
+        ctx.fillStyle = COLORS.CHALK_WHITE;
+        ctx.font = '28px "Caveat", cursive';
+        ctx.fillText(event.content, px, py);
+      }
+
+      if (event.type === 'svg_path') {
+        try {
+          const path = new Path2D(event.path);
+          ctx.strokeStyle = event.strokeColor ?? COLORS.CHALK_WHITE;
+          ctx.lineWidth = event.strokeWidth ?? 2;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.stroke(path);
+        } catch (e) {
+          console.warn('Erro ao renderizar SVG path:', e);
+        }
+      }
+    }
+  }, [renderableEvents]);
+
   return (
-    <ErrorBoundary>
-      <WithSkiaWeb
-        opts={{ locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/canvaskit-wasm@0.39.1/bin/full/${file}` }}
-        getComponent={() => import('./ChalkBoard')}
-        fallback={<View style={{flex: 1, justifyContent: 'center', alignItems: 'center'}}><Text style={{color: 'white'}}>Carregando Quadro...</Text></View>}
+    <View style={styles.container}>
+      {/* Importa a fonte Caveat do Google Fonts */}
+      {/* @ts-ignore */}
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Caveat&display=swap');`}</style>
+      {/* @ts-ignore */}
+      <canvas
+        ref={canvasRef}
+        style={{ width: '100%', height: '100%', display: 'block' }}
+        width={800}
+        height={600}
       />
-    </ErrorBoundary>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: COLORS.CHALKBOARD_GREEN,
+  },
+});
