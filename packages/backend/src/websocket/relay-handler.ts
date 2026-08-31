@@ -59,8 +59,15 @@ export const handleRelayConnection = (clientWs: WebSocket, request: IncomingMess
 
         geminiWs = new WebSocket(GEMINI_WS_URL);
 
-        geminiWs.on('open', () => {
+        geminiWs.on('open', async () => {
           console.log(`[RELAY] Connected to Gemini for user ${userId}`);
+          
+          const currentUsage = await UsageService.getUserUsage(userId!, new Date().toISOString().slice(0, 7));
+          clientWs.send(JSON.stringify({
+            type: 'session_ready',
+            sessionId: Math.random().toString(36).substring(7),
+            usage: currentUsage
+          }));
           
           const systemInstruction = `Você é CenovIA, uma professora particular afetuosa, paciente e muito didática de ${context?.subjectName || 'várias matérias'} para ${context?.gradeLabel || 'o aluno'}. 
 Responda SEMPRE em português do Brasil, com linguagem clara e adequada para o nível do aluno.
