@@ -66,7 +66,8 @@ export const handleRelayConnection = (clientWs: WebSocket, request: IncomingMess
 Responda SEMPRE em português do Brasil, com linguagem clara e adequada para o nível do aluno.
 Quando explicar algo que precisa de visualização (fórmulas, diagramas, estruturas), use a função draw_board.
 Se o aluno interromper você, pare de falar imediatamente e escute.
-Seja encorajadora e positiva. Celebre quando o aluno acertar.`;
+Seja encorajadora e positiva. Celebre quando o aluno acertar.
+Apresente-se brevemente e pergunte o que o aluno gostaria de aprender hoje. Aguarde a resposta do aluno antes de continuar.`;
 
           const setupMessage = {
             setup: {
@@ -140,17 +141,7 @@ Seja encorajadora e positiva. Celebre quando o aluno acertar.`;
                 sessionId: Math.random().toString(36).substring(7),
                 usage: currentUsage
               }));
-
-              // Envia uma saudação inicial da professora para testar o pipeline de áudio
-              geminiWs!.send(JSON.stringify({
-                clientContent: {
-                  turns: [{
-                    role: 'user',
-                    parts: [{ text: 'Olá!' }]
-                  }],
-                  turnComplete: true
-                }
-              }));
+              // A saudação está no system prompt — o modelo falará quando o aluno falar
             }
 
             // Sinaliza para o frontend quando a professora terminou de falar
