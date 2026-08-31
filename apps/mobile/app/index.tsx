@@ -7,7 +7,7 @@ export default function Index() {
   if (loading) return null;
 
   if (session) {
-    return <Redirect href="/(session)/classroom" />;
+    return <Redirect href="/(auth)/onboarding" />;
   }
 
   return <Redirect href="/(auth)/welcome" />;

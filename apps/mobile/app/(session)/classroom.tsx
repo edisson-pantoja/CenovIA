@@ -54,7 +54,14 @@ function ClassroomScreen() {
   // ── Conectar ao backend relay ─────────────────────────────────────────────
 
   useEffect(() => {
-    if (!session?.access_token || !studyContext) return;
+    if (!session?.access_token) return;
+    
+    // Se o usuário recarregou a página ou pulou o onboarding, studyContext será nulo.
+    // Nesse caso, forçamos ele a voltar para a tela de escolha de matérias.
+    if (!studyContext) {
+      router.replace('/(auth)/onboarding');
+      return;
+    }
 
     connectToSession();
 

@@ -28,7 +28,7 @@ export default function SignInScreen() {
       // After sign up, can route to onboarding
       router.push('/(auth)/onboarding');
     } else {
-      router.replace('/(session)/classroom');
+      router.replace('/(auth)/onboarding');
     }
   };
 
