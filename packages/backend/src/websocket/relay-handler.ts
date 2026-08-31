@@ -77,7 +77,7 @@ Seja encorajadora e positiva. Celebre quando o aluno acertar.`;
 
           const setupMessage = {
             setup: {
-              model: "models/gemini-2.0-flash-exp",
+              model: "models/gemini-2.5-flash-native-audio-latest",
               systemInstruction: {
                 parts: [{ text: systemInstruction }]
               },
