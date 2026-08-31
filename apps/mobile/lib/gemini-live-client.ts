@@ -105,6 +105,12 @@ export class GeminiLiveClient {
     this.ws.send(JSON.stringify(msg));
   }
 
+  /** Sinaliza que o aluno terminou de falar/enviar áudio */
+  sendTurnComplete(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: 'turn_complete' }));
+  }
+
   /** Encerra a sessão e fecha o WebSocket de forma limpa */
   disconnect(): void {
     this.isIntentionalClose = true;

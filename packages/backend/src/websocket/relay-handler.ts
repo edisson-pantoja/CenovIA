@@ -204,6 +204,13 @@ Seja encorajadora e positiva. Celebre quando o aluno acertar.`;
             }
           };
           geminiWs.send(JSON.stringify(geminiFormat));
+        } else if (msg.type === 'turn_complete') {
+          const geminiFormat = {
+            clientContent: {
+              turnComplete: true
+            }
+          };
+          geminiWs.send(JSON.stringify(geminiFormat));
         }
       }
     } catch (error) {

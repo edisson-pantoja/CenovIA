@@ -173,6 +173,7 @@ function ClassroomScreen() {
         reader.onloadend = () => {
           const base64 = (reader.result as string).split(',')[1];
           geminiClient.sendAudioChunk(base64);
+          geminiClient.sendTurnComplete();
         };
         reader.readAsDataURL(blob);
       } catch (err) {
