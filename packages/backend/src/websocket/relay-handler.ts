@@ -140,6 +140,22 @@ Seja encorajadora e positiva. Celebre quando o aluno acertar.`;
                 sessionId: Math.random().toString(36).substring(7),
                 usage: currentUsage
               }));
+
+              // Envia uma saudação inicial da professora para testar o pipeline de áudio
+              geminiWs!.send(JSON.stringify({
+                clientContent: {
+                  turns: [{
+                    role: 'user',
+                    parts: [{ text: 'Olá!' }]
+                  }],
+                  turnComplete: true
+                }
+              }));
+            }
+
+            // Sinaliza para o frontend quando a professora terminou de falar
+            if (geminiJson?.serverContent?.turnComplete) {
+              clientWs.send(JSON.stringify({ type: 'teacher_state', state: 'idle' }));
             }
 
             // Intercept board events (function calls)

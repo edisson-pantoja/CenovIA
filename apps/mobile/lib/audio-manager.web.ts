@@ -1,0 +1,139 @@
+/**
+ * AudioManager (Web override) — usa Web Audio API para gravar e reproduzir áudio.
+ *
+ * No browser, o expo-av não consegue tocar raw PCM diretamente.
+ * Este arquivo substitui audio-manager.ts no build web (extensão .web.ts).
+ *
+ * Entrada:  PCM 16-bit, 16kHz, mono (para o Gemini)
+ * Saída:    PCM 16-bit, 24kHz, mono (do Gemini) → tocado via AudioContext
+ */
+
+import { AVPlaybackStatus } from 'expo-av';
+
+type AudioChunkCallback = (base64Chunk: string) => void;
+
+/** Converte base64 de raw PCM Int16 para um AudioBuffer tocável */
+function pcmBase64ToAudioBuffer(
+  base64: string,
+  sampleRate: number,
+  ctx: AudioContext,
+): AudioBuffer {
+  const binaryStr = atob(base64);
+  const bytes = new Uint8Array(binaryStr.length);
+  for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+
+  // Raw PCM é Int16 (2 bytes por sample)
+  const samples = bytes.length / 2;
+  const buffer = ctx.createBuffer(1, samples, sampleRate);
+  const channelData = buffer.getChannelData(0);
+  const view = new DataView(bytes.buffer);
+  for (let i = 0; i < samples; i++) {
+    // Little-endian Int16 → Float32 [-1, 1]
+    channelData[i] = view.getInt16(i * 2, true) / 32768.0;
+  }
+  return buffer;
+}
+
+export class AudioManager {
+  // Gravação (input) — delegada ao WebAudioRecorder no classroom.tsx
+  private recording: null = null;
+  private sound: null = null;
+
+  // Output queue — usamos AudioContext para tocar chunks sequencialmente
+  private playbackCtx: AudioContext | null = null;
+  private nextPlayTime: number = 0;
+
+  // Buffer de replay
+  private replayBuffer: { timestampMs: number; uri: string }[] = [];
+
+  onAudioChunk: AudioChunkCallback = () => {};
+  onPlaybackStatusUpdate: ((status: AVPlaybackStatus) => void) | null = null;
+
+  private getPlaybackContext(): AudioContext {
+    if (!this.playbackCtx || this.playbackCtx.state === 'closed') {
+      const Ctx = window.AudioContext || (window as any).webkitAudioContext;
+      this.playbackCtx = new Ctx();
+      this.nextPlayTime = 0;
+    }
+    return this.playbackCtx;
+  }
+
+  async requestPermissions(): Promise<boolean> {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach(t => t.stop());
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // startRecording / stopRecording are handled by WebAudioRecorder in classroom.tsx for web
+  async startRecording(): Promise<void> {}
+  async stopRecording(): Promise<string | null> { return null; }
+
+  /**
+   * Toca um chunk de áudio PCM base64 (24kHz, 16-bit, mono) vindo do Gemini.
+   * Os chunks são enfileirados para reprodução contínua sem falhas (gapless).
+   */
+  async playAudioChunk(base64Pcm: string, timestampMs: number): Promise<void> {
+    try {
+      const ctx = this.getPlaybackContext();
+
+      // Garante que o contexto está ativo (navegadores suspendem por política de autoplay)
+      if (ctx.state === 'suspended') {
+        await ctx.resume();
+      }
+
+      const audioBuffer = pcmBase64ToAudioBuffer(base64Pcm, 24000, ctx);
+
+      const source = ctx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(ctx.destination);
+
+      // Agenda o próximo chunk para começar exatamente onde o anterior terminou (gapless)
+      const startTime = Math.max(ctx.currentTime, this.nextPlayTime);
+      source.start(startTime);
+      this.nextPlayTime = startTime + audioBuffer.duration;
+
+      // Guarda no buffer de replay como data URI (simplificado)
+      this.replayBuffer.push({ timestampMs, uri: '' });
+    } catch (err) {
+      console.error('[AUDIO-WEB] Erro ao tocar chunk:', err);
+    }
+  }
+
+  async pausePlayback(): Promise<void> {
+    await this.playbackCtx?.suspend();
+  }
+
+  async resumePlayback(): Promise<void> {
+    await this.playbackCtx?.resume();
+  }
+
+  async seekPlayback(_timeMs: number): Promise<void> {}
+
+  getReplayChunkAt(_timeMs: number): string | null { return null; }
+
+  getTotalBufferedDuration(): number {
+    return this.replayBuffer.length > 0
+      ? this.replayBuffer[this.replayBuffer.length - 1].timestampMs
+      : 0;
+  }
+
+  clearBuffer(): void {
+    this.replayBuffer = [];
+    this.nextPlayTime = 0;
+  }
+
+  async cleanup(): Promise<void> {
+    this.clearBuffer();
+    if (this.playbackCtx && this.playbackCtx.state !== 'closed') {
+      await this.playbackCtx.close();
+      this.playbackCtx = null;
+    }
+    console.log('[AUDIO-WEB] Recursos liberados');
+  }
+}
+
+export const audioManager = new AudioManager();
