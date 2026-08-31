@@ -48,39 +48,39 @@ export class GeminiLiveClient {
       }
 
       this.ws.onopen = () => {
-        console.log('[GEMINI-CLIENT] WebSocket aberto, iniciando sessão...');
+        console.warn('🔥 [DEBUG] WebSocket ABERTO com sucesso! URL:', wsUrl);
         this.reconnectAttempts = 0;
         this.onConnected();
 
-        // Envia mensagem de início de sessão com token e contexto
         const startMsg: ClientMessage = {
           type: 'session_start',
           context,
           token,
         };
+        console.warn('🔥 [DEBUG] Enviando session_start:', { context });
         this.ws!.send(JSON.stringify(startMsg));
         resolve();
       };
 
       this.ws.onmessage = (event) => {
+        console.warn('🔥 [DEBUG] Recebeu mensagem do servidor:', typeof event.data === 'string' ? event.data.substring(0, 100) + '...' : 'Dados binários');
         this._handleServerMessage(event.data);
       };
 
       this.ws.onerror = (err) => {
-        console.error('[GEMINI-CLIENT] Erro WebSocket:', err);
+        console.error('🔥 [DEBUG] Erro WebSocket (conexão falhou):', err);
         this.onError('WS_ERROR', 'Erro de conexão com o servidor');
         reject(err);
       };
 
       this.ws.onclose = (event) => {
-        console.log(`[GEMINI-CLIENT] Conexão fechada: code=${event.code} reason=${event.reason}`);
+        console.warn(`🔥 [DEBUG] Conexão fechada: code=${event.code} reason=${event.reason || 'nenhuma'}`);
         this.onDisconnected();
 
-        // Reconectar automaticamente em caso de queda inesperada
         if (!this.isIntentionalClose && this.reconnectAttempts < this.maxReconnectAttempts) {
           this.reconnectAttempts++;
           const delay = this.reconnectAttempts * 2000;
-          console.log(`[GEMINI-CLIENT] Reconectando em ${delay}ms (tentativa ${this.reconnectAttempts})...`);
+          console.warn(`🔥 [DEBUG] Tentando reconectar em ${delay}ms...`);
           setTimeout(() => {
             this.connect(token, context).catch(console.error);
           }, delay);
