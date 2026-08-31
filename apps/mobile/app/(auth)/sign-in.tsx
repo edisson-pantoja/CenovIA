@@ -43,6 +43,13 @@ export default function SignInScreen() {
         </TouchableOpacity>
       </View>
 
+      {/* DEBUG: Remove in production */}
+      {(!process.env.EXPO_PUBLIC_SUPABASE_URL) && (
+        <View style={{ backgroundColor: 'red', padding: 10, borderRadius: 8, marginBottom: 15 }}>
+          <Text style={{ color: 'white', fontWeight: 'bold' }}>⚠️ ERRO: Vercel não carregou o EXPO_PUBLIC_SUPABASE_URL!</Text>
+        </View>
+      )}
+
       <View style={styles.form}>
         {!isLogin && (
           <TextInput
