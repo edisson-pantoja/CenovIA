@@ -33,7 +33,7 @@ import ChalkBoardWrapper from '../../components/ChalkBoard/ChalkBoardWrapper';
 import AudioReplayPlayer from '../../components/AudioReplayPlayer';
 import UsageBanner from '../../components/UsageBanner';
 
-export default function ClassroomScreen() {
+function ClassroomScreen() {
   const router = useRouter();
   const { session } = useAuth();
   const { studyContext, usage, setUsage } = useSession();
@@ -265,6 +265,20 @@ export default function ClassroomScreen() {
       </View>
     </SafeAreaView>
   );
+}
+
+class ClassroomErrorBoundary extends React.Component<{children: React.ReactNode}, {hasError: boolean, errorMsg: string}> {
+  state = { hasError: false, errorMsg: '' };
+  static getDerivedStateFromError(error: any) { return { hasError: true, errorMsg: error?.message || 'Unknown error' }; }
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) { console.error("Classroom Crash:", error, errorInfo); }
+  render() {
+    if (this.state.hasError) return <SafeAreaView style={styles.container}><Text style={{color:'red', margin:20}}>Erro crítico na sala: {this.state.errorMsg}</Text></SafeAreaView>;
+    return this.props.children;
+  }
+}
+
+export default function ClassroomScreenWithBoundary() {
+  return <ClassroomErrorBoundary><ClassroomScreen /></ClassroomErrorBoundary>;
 }
 
 const styles = StyleSheet.create({
