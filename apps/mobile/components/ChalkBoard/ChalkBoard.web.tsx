@@ -8,17 +8,15 @@
  * Para replay: aceita `replayTimeMs` que filtra apenas os eventos até aquele momento.
  */
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, View, LayoutChangeEvent } from 'react-native';
 import {
   Canvas,
   Text as SkiaText,
-  useFont,
   Path,
   Skia,
   Fill,
 } from '@shopify/react-native-skia';
-import { Caveat_400Regular } from '@expo-google-fonts/caveat';
 import { COLORS } from '../../lib/constants';
 import type { BoardEvent } from '@cenovia/shared';
 import FormulaRenderer from './FormulaRenderer';
@@ -34,7 +32,26 @@ interface CanvasSize {
 }
 
 export default function ChalkBoard({ events = [], replayTimeMs }: ChalkBoardProps) {
-  const font = useFont(Caveat_400Regular, 28);
+  const [font, setFont] = useState<any>(null);
+
+  useEffect(() => {
+    // Carrega a fonte manualmente no Web sem usar o useFont do Skia
+    fetch('https://fonts.gstatic.com/s/caveat/v18/Wnz6HAc5bAfYB2Q7Yj82czw3aA.ttf')
+      .then((r) => r.arrayBuffer())
+      .then((buffer) => {
+        try {
+          const data = Skia.Data.fromBytes(new Uint8Array(buffer));
+          const tf = Skia.Typeface.MakeFreeTypeFaceFromData(data);
+          if (tf) {
+            setFont(Skia.Font(tf, 28));
+          }
+        } catch (e) {
+          console.error("Erro interno do Skia ao criar fonte", e);
+        }
+      })
+      .catch((e) => console.error('Erro de fetch na fonte:', e));
+  }, []);
+
   const [canvasSize, setCanvasSize] = useState<CanvasSize>({ width: 0, height: 0 });
 
   const onLayout = useCallback((e: LayoutChangeEvent) => {
