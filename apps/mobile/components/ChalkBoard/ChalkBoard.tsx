@@ -9,7 +9,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { StyleSheet, View, LayoutChangeEvent } from 'react-native';
+import { StyleSheet, View, LayoutChangeEvent, Platform } from 'react-native';
 import {
   Canvas,
   Text as SkiaText,
@@ -38,7 +38,23 @@ interface CanvasSize {
 }
 
 export default function ChalkBoard({ events = [], replayTimeMs }: ChalkBoardProps) {
-  const font = useFont(Caveat_400Regular, 28);
+  const nativeFont = useFont(Platform.OS === 'web' ? null : Caveat_400Regular, 28);
+  const [webFont, setWebFont] = useState<any>(null);
+
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      fetch('https://fonts.gstatic.com/s/caveat/v18/Wnz6HAc5bAfYB2Q7Yj82czw3aA.ttf')
+        .then((r) => r.arrayBuffer())
+        .then((buffer) => {
+          const data = Skia.Data.fromBytes(new Uint8Array(buffer));
+          const tf = Skia.Typeface.MakeFreeTypeFaceFromData(data);
+          if (tf) setWebFont(Skia.Font(tf, 28));
+        })
+        .catch((e) => console.error('Erro carregando fonte web:', e));
+    }
+  }, []);
+
+  const font = Platform.OS === 'web' ? webFont : nativeFont;
   const [canvasSize, setCanvasSize] = useState<CanvasSize>({ width: 0, height: 0 });
 
   const onLayout = useCallback((e: LayoutChangeEvent) => {
