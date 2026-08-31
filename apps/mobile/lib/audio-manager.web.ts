@@ -72,6 +72,8 @@ export class AudioManager {
   async startRecording(): Promise<void> {}
   async stopRecording(): Promise<string | null> { return null; }
 
+  private activeSources: AudioBufferSourceNode[] = [];
+
   /**
    * Toca um chunk de áudio PCM base64 (24kHz, 16-bit, mono) vindo do Gemini.
    * Os chunks são enfileirados para reprodução contínua sem falhas (gapless).
@@ -80,7 +82,6 @@ export class AudioManager {
     try {
       const ctx = this.getPlaybackContext();
 
-      // Garante que o contexto está ativo (navegadores suspendem por política de autoplay)
       if (ctx.state === 'suspended') {
         await ctx.resume();
       }
@@ -91,16 +92,28 @@ export class AudioManager {
       source.buffer = audioBuffer;
       source.connect(ctx.destination);
 
-      // Agenda o próximo chunk para começar exatamente onde o anterior terminou (gapless)
       const startTime = Math.max(ctx.currentTime, this.nextPlayTime);
       source.start(startTime);
       this.nextPlayTime = startTime + audioBuffer.duration;
+      
+      this.activeSources.push(source);
+      source.onended = () => {
+        this.activeSources = this.activeSources.filter(s => s !== source);
+      };
 
-      // Guarda no buffer de replay como data URI (simplificado)
       this.replayBuffer.push({ timestampMs, uri: '' });
     } catch (err) {
       console.error('[AUDIO-WEB] Erro ao tocar chunk:', err);
     }
+  }
+
+  /** Interrompe a reprodução atual limpando a fila */
+  clearPlayback(): void {
+    for (const source of this.activeSources) {
+      try { source.stop(); } catch (e) {}
+    }
+    this.activeSources = [];
+    this.nextPlayTime = 0;
   }
 
   async pausePlayback(): Promise<void> {

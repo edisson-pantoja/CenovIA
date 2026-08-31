@@ -98,6 +98,14 @@ export class GeminiLiveClient {
     this.ws.send(JSON.stringify(msg));
   }
 
+  /** Interrompe a fala atual da professora enviando um turn_complete antecipado ou sinal vazio */
+  sendInterrupt(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    // Sending a turn_complete message without parts acts as an interrupt for BidiGenerateContent
+    const msg: ClientMessage = { type: 'turn_complete' };
+    this.ws.send(JSON.stringify(msg));
+  }
+
   /** Envia mensagem de texto (quando o aluno prefere digitar) */
   sendTextMessage(text: string): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;

@@ -135,6 +135,16 @@ export class AudioManager {
     }
   }
 
+  /** Interrompe a reprodução atual */
+  async clearPlayback(): Promise<void> {
+    if (this.sound) {
+      try {
+        await this.sound.unloadAsync();
+      } catch (e) {}
+      this.sound = null;
+    }
+  }
+
   // ── Replay (controles do player) ──────────────────────────────────────────
 
   async pausePlayback(): Promise<void> {
