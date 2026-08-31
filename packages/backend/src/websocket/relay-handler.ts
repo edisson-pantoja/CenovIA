@@ -168,7 +168,29 @@ Seja encorajadora e positiva. Celebre quando o aluno acertar.`;
         });
 
       } else if (geminiWs && geminiWs.readyState === WebSocket.OPEN) {
-        geminiWs.send(messageStr);
+        // Formata a mensagem de áudio para o padrão do Gemini Live API
+        if (msg.type === 'audio_chunk') {
+          const geminiFormat = {
+            realtimeInput: {
+              mediaChunks: [{
+                mimeType: `audio/pcm;rate=16000`,
+                data: msg.data
+              }]
+            }
+          };
+          geminiWs.send(JSON.stringify(geminiFormat));
+        } else if (msg.type === 'text_message') {
+          const geminiFormat = {
+            clientContent: {
+              turns: [{
+                role: "user",
+                parts: [{ text: msg.text }]
+              }],
+              turnComplete: true
+            }
+          };
+          geminiWs.send(JSON.stringify(geminiFormat));
+        }
       }
     } catch (error) {
       console.error('[RELAY] Error parsing client message:', error);

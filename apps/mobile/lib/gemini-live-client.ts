@@ -179,8 +179,16 @@ export class GeminiLiveClient {
           console.log('[GEMINI-CLIENT] Setup Gemini concluído');
           this.onTeacherStateChange('idle');
         } else if (raw['serverContent']) {
-          const content = raw['serverContent'] as Record<string, unknown>;
-          if (content['turnComplete']) {
+          const content = raw['serverContent'] as any;
+          if (content.modelTurn?.parts) {
+            for (const part of content.modelTurn.parts) {
+              if (part.inlineData && part.inlineData.mimeType.startsWith('audio/pcm')) {
+                this.onAudioChunk(part.inlineData.data, Date.now());
+                this.onTeacherStateChange('speaking');
+              }
+            }
+          }
+          if (content.turnComplete) {
             // Professora terminou de falar
             this.onTeacherStateChange('idle');
           }
