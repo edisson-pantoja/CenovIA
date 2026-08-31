@@ -28,10 +28,13 @@ function RootLayoutNav() {
     if (loading) return;
 
     const inAuthGroup = segments[0] === '(auth)';
+    const inOnboarding = segments[1] === 'onboarding';
+
     if (!session && !inAuthGroup) {
       router.replace('/(auth)/welcome');
-    } else if (session && inAuthGroup) {
-      router.replace('/');
+    } else if (session && inAuthGroup && !inOnboarding) {
+      // Redireciona para onboarding apenas se não estiver já lá
+      router.replace('/(auth)/onboarding');
     }
   }, [session, loading, segments, router]);
 
