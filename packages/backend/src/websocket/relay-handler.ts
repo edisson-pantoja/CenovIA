@@ -71,6 +71,13 @@ Ao iniciar a sessão, cumprimente o aluno de forma calorosa e pergunte o que ele
               }
             }]
           }],
+          // Desabilita o VAD automático para termos controle total (modelo PTT)
+          // Com VAD desabilitado, usamos activityStart/activityEnd para definir as fronteiras de fala
+          realtimeInputConfig: {
+            automaticActivityDetection: {
+              disabled: true
+            }
+          },
           generationConfig: {
             responseModalities: ['AUDIO'],
             speechConfig: {
@@ -236,31 +243,40 @@ Ao iniciar a sessão, cumprimente o aluno de forma calorosa e pergunte o que ele
         connectToGemini(studyContext);
 
       } else if (geminiWs && geminiWs.readyState === WebSocket.OPEN) {
-        if (msg.type === 'audio_chunk') {
+        if (msg.type === 'ptt_start') {
+          // Usuário pressionou o botão: sinaliza início de fala ao Gemini
+          console.log('[RELAY] PTT Start → activityStart');
+          geminiWs.send(JSON.stringify({
+            realtimeInput: { activityStart: {} }
+          }));
+
+        } else if (msg.type === 'audio_chunk') {
           const mimeType = msg.mimeType || 'audio/pcm;rate=16000';
           const base64Data = msg.data as string;
 
           if (!base64Data || base64Data.length < 10) {
             console.warn('[RELAY] audio_chunk vazio, ignorando');
           } else {
-            console.log(`[RELAY] Enviando audio (realtimeInput): ${base64Data.length} chars, mimeType=${mimeType}`);
             geminiWs.send(JSON.stringify({
               realtimeInput: {
                 mediaChunks: [{ mimeType, data: base64Data }]
               }
             }));
           }
+
+        } else if (msg.type === 'turn_complete') {
+          // Usuário soltou o botão: sinaliza fim de fala → Gemini responde
+          console.log('[RELAY] PTT End → activityEnd');
+          geminiWs.send(JSON.stringify({
+            realtimeInput: { activityEnd: {} }
+          }));
+
         } else if (msg.type === 'text_message') {
           geminiWs.send(JSON.stringify({
             clientContent: {
               turns: [{ role: 'user', parts: [{ text: msg.text }] }],
               turnComplete: true
             }
-          }));
-        } else if (msg.type === 'turn_complete') {
-          console.log('[RELAY] Enviando turnComplete para o Gemini');
-          geminiWs.send(JSON.stringify({
-            clientContent: { turnComplete: true }
           }));
         }
       } else if (geminiWs && geminiWs.readyState !== WebSocket.OPEN) {

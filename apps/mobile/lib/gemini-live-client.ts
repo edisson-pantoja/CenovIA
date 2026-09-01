@@ -91,6 +91,12 @@ export class GeminiLiveClient {
 
   // ── Envio de dados ─────────────────────────────────────────────────────────
 
+  /** Sinaliza ao backend que o usuário PRESSIONOU o botão PTT (activityStart para o Gemini) */
+  sendPTTStart(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: 'ptt_start' }));
+  }
+
   /** Envia chunk de áudio capturado do microfone (base64) */
   sendAudioChunk(base64Audio: string, mimeType: string = 'audio/pcm;rate=16000'): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
@@ -98,12 +104,10 @@ export class GeminiLiveClient {
     this.ws.send(JSON.stringify(msg));
   }
 
-  /** Interrompe a fala atual da professora enviando um turn_complete antecipado ou sinal vazio */
-  sendInterrupt(): void {
+  /** Sinaliza ao backend que o usuário SOLTOU o botão PTT (activityEnd para o Gemini) */
+  sendTurnComplete(): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    // Sending a turn_complete message without parts acts as an interrupt for BidiGenerateContent
-    const msg: ClientMessage = { type: 'turn_complete' };
-    this.ws.send(JSON.stringify(msg));
+    this.ws.send(JSON.stringify({ type: 'turn_complete' }));
   }
 
   /** Envia mensagem de texto (quando o aluno prefere digitar) */

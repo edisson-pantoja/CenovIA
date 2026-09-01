@@ -150,8 +150,10 @@ function ClassroomScreen() {
 
     try {
       if (Platform.OS === 'web' && WebAudioRecorder.isSupported()) {
+        // Avisa o Gemini que o usuário começou a falar (activityStart)
+        geminiClient.sendPTTStart();
+
         // Configura o callback de streaming ANTES de iniciar a gravação
-        // Cada chunk de ~256ms será enviado imediatamente ao Gemini (realtimeInput)
         webAudioRecorder.onChunk = (base64: string, mimeType: string) => {
           geminiClient.sendAudioChunk(base64, mimeType);
         };
