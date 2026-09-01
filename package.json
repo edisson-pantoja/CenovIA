@@ -10,7 +10,6 @@
   ],
   "scripts": {
     "mobile": "npm run start --workspace=apps/mobile",
-    "mobile:tunnel": "npm run start --workspace=apps/mobile -- --tunnel",
     "backend": "npm run dev --workspace=packages/backend",
     "backend:build": "npm run build --workspace=packages/backend",
     "type-check": "tsc --noEmit -p packages/shared/tsconfig.json"

@@ -20,6 +20,7 @@ import {
   Platform,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import * as FileSystem from 'expo-file-system';
 import { useAuth } from '../../context/AuthContext';
 import { useSession } from '../../context/SessionContext';
 import { geminiClient } from '../../lib/gemini-live-client';
@@ -28,12 +29,12 @@ import { COLORS } from '../../lib/constants';
 import type { BoardEvent, TeacherState, UserUsage } from '@cenovia/shared';
 
 import TeacherAvatar from '../../components/TeacherAvatar/TeacherAvatar';
-import ChalkBoardWrapper from '../../components/ChalkBoard/ChalkBoardWrapper';
+import SpeakingIndicator from '../../components/TeacherAvatar/SpeakingIndicator';
+import ChalkBoard from '../../components/ChalkBoard/ChalkBoard';
 import AudioReplayPlayer from '../../components/AudioReplayPlayer';
 import UsageBanner from '../../components/UsageBanner';
-import { webAudioRecorder, WebAudioRecorder } from '../../lib/audio-recorder';
 
-function ClassroomScreen() {
+export default function ClassroomScreen() {
   const router = useRouter();
   const { session } = useAuth();
   const { studyContext, usage, setUsage } = useSession();
@@ -54,14 +55,7 @@ function ClassroomScreen() {
   // ── Conectar ao backend relay ─────────────────────────────────────────────
 
   useEffect(() => {
-    if (!session?.access_token) return;
-    
-    // Se o usuário recarregou a página ou pulou o onboarding, studyContext será nulo.
-    // Nesse caso, forçamos ele a voltar para a tela de escolha de matérias.
-    if (!studyContext) {
-      router.replace('/(auth)/onboarding');
-      return;
-    }
+    if (!session?.access_token || !studyContext) return;
 
     connectToSession();
 
@@ -91,8 +85,8 @@ function ClassroomScreen() {
       }, 1000);
     };
 
-    geminiClient.onAudioChunk = async (data, timestampMs, mimeType) => {
-      await audioManager.playAudioChunk(data, timestampMs, mimeType);
+    geminiClient.onAudioChunk = async (data, timestampMs) => {
+      await audioManager.playAudioChunk(data, timestampMs);
     };
 
     geminiClient.onBoardEvent = (event) => {
@@ -147,32 +141,13 @@ function ClassroomScreen() {
 
   const handlePTTStart = useCallback(async () => {
     if (!isConnected || usageLimitReached) return;
-
     try {
-      if (Platform.OS === 'web' && WebAudioRecorder.isSupported()) {
-        // Avisa o Gemini que o usuário começou a falar (activityStart)
-        geminiClient.sendPTTStart();
-
-        // Configura o callback de streaming ANTES de iniciar a gravação
-        webAudioRecorder.onChunk = (base64: string, mimeType: string) => {
-          geminiClient.sendAudioChunk(base64, mimeType);
-        };
-        const ok = await webAudioRecorder.start();
-        if (!ok) {
-          webAudioRecorder.onChunk = undefined;
-          Alert.alert('Permissão necessária', 'Permita o acesso ao microfone no navegador.');
-          return;
-        }
-      } else {
-        await audioManager.startRecording();
-      }
-      // Para a fala atual da professora ao pressionar o botão
-      audioManager.clearPlayback();
+      await audioManager.startRecording();
       setIsRecording(true);
       setTeacherState('listening');
-      setReplayTimeMs(undefined);
+      setReplayTimeMs(undefined); // Sai do modo replay ao falar
     } catch (err) {
-      Alert.alert('Permissão necessária', 'Habilite o microfone nas configurações.');
+      Alert.alert('Permissão necessária', 'Habilite o microfone nas configurações do dispositivo.');
     }
   }, [isConnected, usageLimitReached]);
 
@@ -181,34 +156,21 @@ function ClassroomScreen() {
     setIsRecording(false);
     setTeacherState('thinking');
 
-    try {
-      if (Platform.OS === 'web' && WebAudioRecorder.isSupported()) {
-        // Streaming já foi feito durante a gravação — apenas para e envia turn_complete
-        await webAudioRecorder.stop();
-        if (geminiClient.isConnected) {
-          geminiClient.sendTurnComplete();
-        } else {
-          setTeacherState('idle');
-        }
-      } else {
-        // Native (iOS/Android): usa expo-av em lote
-        const uri = await audioManager.stopRecording();
-        if (uri && geminiClient.isConnected) {
-          const response = await fetch(uri);
-          const blob = await response.blob();
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            const base64 = (reader.result as string).split(',')[1];
-            geminiClient.sendAudioChunk(base64, 'audio/pcm;rate=16000');
-            geminiClient.sendTurnComplete();
-          };
-          reader.readAsDataURL(blob);
-        } else {
-          setTeacherState('idle');
-        }
+    const uri = await audioManager.stopRecording();
+    if (uri && geminiClient.isConnected) {
+      // Para o MVP, lemos o arquivo e enviamos como base64
+      // Em produção, implementar streaming de chunks em tempo real
+      try {
+        // Usa expo-file-system para ler como base64, muito mais estável no React Native
+        const base64 = await FileSystem.readAsStringAsync(uri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        geminiClient.sendAudioChunk(base64);
+      } catch (err) {
+        console.error('[CLASSROOM] Erro ao enviar áudio:', err);
+        setTeacherState('idle');
       }
-    } catch (err) {
-      console.error('[CLASSROOM] Erro ao enviar áudio:', err);
+    } else {
       setTeacherState('idle');
     }
   }, [isRecording]);
@@ -241,7 +203,7 @@ function ClassroomScreen() {
       </View>
 
       {/* Banner de uso do free tier */}
-      {usage && <UsageBanner minutes={usage.minutesRemaining} />}
+      {usage && <UsageBanner minutesRemaining={usage.minutesRemaining} minutesLimit={usage.minutesLimit} />}
 
       {/* Split 50/50 */}
       <View style={styles.split}>
@@ -249,6 +211,7 @@ function ClassroomScreen() {
         {/* ── Metade superior: Professora ─────────────────────────── */}
         <View style={styles.teacherSection}>
           <TeacherAvatar state={teacherState} />
+          <SpeakingIndicator state={teacherState} />
 
           {/* Player de replay — aparece quando há áudio gravado */}
           {audioManager.getTotalBufferedDuration() > 0 && (
@@ -273,7 +236,7 @@ function ClassroomScreen() {
 
         {/* ── Metade inferior: Quadro verde ───────────────────────── */}
         <View style={styles.boardSection}>
-          <ChalkBoardWrapper
+          <ChalkBoard
             events={boardEvents}
             replayTimeMs={replayTimeMs}
           />
@@ -300,20 +263,6 @@ function ClassroomScreen() {
       </View>
     </SafeAreaView>
   );
-}
-
-class ClassroomErrorBoundary extends React.Component<{children: React.ReactNode}, {hasError: boolean, errorMsg: string}> {
-  state = { hasError: false, errorMsg: '' };
-  static getDerivedStateFromError(error: any) { return { hasError: true, errorMsg: error?.message || 'Unknown error' }; }
-  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) { console.error("Classroom Crash:", error, errorInfo); }
-  render() {
-    if (this.state.hasError) return <SafeAreaView style={styles.container}><Text style={{color:'red', margin:20}}>Erro crítico na sala: {this.state.errorMsg}</Text></SafeAreaView>;
-    return this.props.children;
-  }
-}
-
-export default function ClassroomScreenWithBoundary() {
-  return <ClassroomErrorBoundary><ClassroomScreen /></ClassroomErrorBoundary>;
 }
 
 const styles = StyleSheet.create({

@@ -2,28 +2,48 @@
 node_modules/
 .expo/
 dist/
+build/
 
-# Ambiente
+# Variáveis de ambiente — NUNCA commitar!
 .env
 .env.local
-.env.*.local
-packages/backend/.env
+.env.production
 apps/mobile/.env
+packages/backend/.env
 
-# Builds
-apps/mobile/dist/
+# Expo
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+web-build/
 
-# Logs
-*.log
-npm-debug.log*
-
-# Sistema
-.DS_Store
-Thumbs.db
+# iOS / Android (gerado pelo Expo)
+apps/mobile/ios/
+apps/mobile/android/
 
 # TypeScript
 *.tsbuildinfo
 
-# IDE
-.vscode/
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/settings.json
 .idea/
+*.swp
+*.swo
+
+# Supabase (gerado localmente)
+.supabase/
+supabase/.branches/
+supabase/.temp/

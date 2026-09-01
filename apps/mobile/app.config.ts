@@ -27,12 +27,14 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   },
   web: {
     bundler: 'metro',
-    output: 'single',
+    output: 'static',
     favicon: './assets/images/icon.png'
   },
   plugins: [
     'expo-router',
-    'expo-av'
+    'expo-av',
+    'lottie-react-native',
+    '@shopify/react-native-skia'
   ],
   experiments: {
     typedRoutes: true

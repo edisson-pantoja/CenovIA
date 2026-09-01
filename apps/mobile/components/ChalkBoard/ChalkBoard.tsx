@@ -8,14 +8,16 @@
  * Para replay: aceita `replayTimeMs` que filtra apenas os eventos até aquele momento.
  */
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { StyleSheet, View, LayoutChangeEvent } from 'react-native';
 import {
   Canvas,
   Text as SkiaText,
   useFont,
+  Paint,
   Path,
   Skia,
+  rect,
   Fill,
 } from '@shopify/react-native-skia';
 import { Caveat_400Regular } from '@expo-google-fonts/caveat';
@@ -24,7 +26,9 @@ import type { BoardEvent } from '@cenovia/shared';
 import FormulaRenderer from './FormulaRenderer';
 
 interface ChalkBoardProps {
+  /** Lista de eventos do quadro a renderizar */
   events?: BoardEvent[];
+  /** Para replay: mostra apenas eventos com timestampMs <= replayTimeMs */
   replayTimeMs?: number;
 }
 

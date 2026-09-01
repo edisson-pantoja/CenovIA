@@ -28,7 +28,7 @@ export default function SignInScreen() {
       // After sign up, can route to onboarding
       router.push('/(auth)/onboarding');
     } else {
-      router.replace('/(auth)/onboarding');
+      router.replace('/(session)/classroom');
     }
   };
 
@@ -42,13 +42,6 @@ export default function SignInScreen() {
           <Text style={[styles.tabText, !isLogin && styles.activeTabText]}>Cadastrar</Text>
         </TouchableOpacity>
       </View>
-
-      {/* DEBUG: Remove in production */}
-      {(!process.env.EXPO_PUBLIC_SUPABASE_URL) && (
-        <View style={{ backgroundColor: 'red', padding: 10, borderRadius: 8, marginBottom: 15 }}>
-          <Text style={{ color: 'white', fontWeight: 'bold' }}>⚠️ ERRO: Vercel não carregou o EXPO_PUBLIC_SUPABASE_URL!</Text>
-        </View>
-      )}
 
       <View style={styles.form}>
         {!isLogin && (

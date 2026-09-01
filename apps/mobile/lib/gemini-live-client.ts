@@ -23,7 +23,7 @@ export class GeminiLiveClient {
 
   onConnected: () => void = () => {};
   onSessionReady: (sessionId: string, usage: UserUsage) => void = () => {};
-  onAudioChunk: (data: string, timestampMs: number, mimeType?: string) => void = () => {};
+  onAudioChunk: (data: string, timestampMs: number) => void = () => {};
   onBoardEvent: (event: BoardEvent) => void = () => {};
   onTeacherStateChange: (state: TeacherState) => void = () => {};
   onUsageUpdate: (usage: UserUsage) => void = () => {};
@@ -48,39 +48,39 @@ export class GeminiLiveClient {
       }
 
       this.ws.onopen = () => {
-        console.warn('🔥 [DEBUG] WebSocket ABERTO com sucesso! URL:', wsUrl);
+        console.log('[GEMINI-CLIENT] WebSocket aberto, iniciando sessão...');
         this.reconnectAttempts = 0;
         this.onConnected();
 
+        // Envia mensagem de início de sessão com token e contexto
         const startMsg: ClientMessage = {
           type: 'session_start',
           context,
           token,
         };
-        console.warn('🔥 [DEBUG] Enviando session_start:', { context });
         this.ws!.send(JSON.stringify(startMsg));
         resolve();
       };
 
       this.ws.onmessage = (event) => {
-        console.warn('🔥 [DEBUG] Recebeu mensagem do servidor:', typeof event.data === 'string' ? event.data.substring(0, 100) + '...' : 'Dados binários');
         this._handleServerMessage(event.data);
       };
 
       this.ws.onerror = (err) => {
-        console.error('🔥 [DEBUG] Erro WebSocket (conexão falhou):', err);
+        console.error('[GEMINI-CLIENT] Erro WebSocket:', err);
         this.onError('WS_ERROR', 'Erro de conexão com o servidor');
         reject(err);
       };
 
       this.ws.onclose = (event) => {
-        console.warn(`🔥 [DEBUG] Conexão fechada: code=${event.code} reason=${event.reason || 'nenhuma'}`);
+        console.log(`[GEMINI-CLIENT] Conexão fechada: code=${event.code} reason=${event.reason}`);
         this.onDisconnected();
 
+        // Reconectar automaticamente em caso de queda inesperada
         if (!this.isIntentionalClose && this.reconnectAttempts < this.maxReconnectAttempts) {
           this.reconnectAttempts++;
           const delay = this.reconnectAttempts * 2000;
-          console.warn(`🔥 [DEBUG] Tentando reconectar em ${delay}ms...`);
+          console.log(`[GEMINI-CLIENT] Reconectando em ${delay}ms (tentativa ${this.reconnectAttempts})...`);
           setTimeout(() => {
             this.connect(token, context).catch(console.error);
           }, delay);
@@ -91,23 +91,11 @@ export class GeminiLiveClient {
 
   // ── Envio de dados ─────────────────────────────────────────────────────────
 
-  /** Sinaliza ao backend que o usuário PRESSIONOU o botão PTT (activityStart para o Gemini) */
-  sendPTTStart(): void {
+  /** Envia chunk de áudio PCM capturado do microfone (base64) */
+  sendAudioChunk(base64Audio: string): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    this.ws.send(JSON.stringify({ type: 'ptt_start' }));
-  }
-
-  /** Envia chunk de áudio capturado do microfone (base64) */
-  sendAudioChunk(base64Audio: string, mimeType: string = 'audio/pcm;rate=16000'): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    const msg: ClientMessage = { type: 'audio_chunk', data: base64Audio, mimeType };
+    const msg: ClientMessage = { type: 'audio_chunk', data: base64Audio, mimeType: 'audio/pcm' };
     this.ws.send(JSON.stringify(msg));
-  }
-
-  /** Sinaliza ao backend que o usuário SOLTOU o botão PTT (activityEnd para o Gemini) */
-  sendTurnComplete(): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    this.ws.send(JSON.stringify({ type: 'turn_complete' }));
   }
 
   /** Envia mensagem de texto (quando o aluno prefere digitar) */
@@ -115,12 +103,6 @@ export class GeminiLiveClient {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     const msg: ClientMessage = { type: 'text_message', text };
     this.ws.send(JSON.stringify(msg));
-  }
-
-  /** Sinaliza que o aluno terminou de falar/enviar áudio */
-  sendTurnComplete(): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    this.ws.send(JSON.stringify({ type: 'turn_complete' }));
   }
 
   /** Encerra a sessão e fecha o WebSocket de forma limpa */
@@ -161,7 +143,7 @@ export class GeminiLiveClient {
 
       case 'audio_chunk':
         // Chunk de áudio da professora — repassa para o AudioManager
-        this.onAudioChunk(msg.data, msg.timestampMs, msg.mimeType);
+        this.onAudioChunk(msg.data, msg.timestampMs);
         this.onTeacherStateChange('speaking');
         break;
 
@@ -197,16 +179,8 @@ export class GeminiLiveClient {
           console.log('[GEMINI-CLIENT] Setup Gemini concluído');
           this.onTeacherStateChange('idle');
         } else if (raw['serverContent']) {
-          const content = raw['serverContent'] as any;
-          if (content.modelTurn?.parts) {
-            for (const part of content.modelTurn.parts) {
-              if (part.inlineData && part.inlineData.mimeType.startsWith('audio/pcm')) {
-                this.onAudioChunk(part.inlineData.data, Date.now());
-                this.onTeacherStateChange('speaking');
-              }
-            }
-          }
-          if (content.turnComplete) {
+          const content = raw['serverContent'] as Record<string, unknown>;
+          if (content['turnComplete']) {
             // Professora terminou de falar
             this.onTeacherStateChange('idle');
           }
