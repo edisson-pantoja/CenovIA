@@ -45,7 +45,10 @@ export class WebAudioRecorder {
       const Ctx = window.AudioContext || (window as any).webkitAudioContext;
       // Solicita 16kHz nativamente. O Chrome usa um resampler de alta qualidade internamente.
       this.audioContext = new Ctx({ sampleRate: 16000 });
-      console.log(`[WebAudioRecorder] Taxa real configurada: ${this.audioContext.sampleRate}Hz`);
+      if (this.audioContext.state === 'suspended') {
+        await this.audioContext.resume();
+      }
+      console.log(`[WebAudioRecorder] Taxa real configurada: ${this.audioContext.sampleRate}Hz, state: ${this.audioContext.state}`);
 
       const source = this.audioContext.createMediaStreamSource(this.mediaStream);
 
@@ -57,6 +60,12 @@ export class WebAudioRecorder {
         const inputData = e.inputBuffer.getChannelData(0);
         // O input já está em 16kHz pelo AudioContext
         this.pcmChunks.push(float32ToInt16(inputData));
+        
+        // Silencia o output para evitar eco no alto-falante
+        const outputData = e.outputBuffer.getChannelData(0);
+        for (let i = 0; i < outputData.length; i++) {
+          outputData[i] = 0;
+        }
       };
 
       source.connect(this.processor);
