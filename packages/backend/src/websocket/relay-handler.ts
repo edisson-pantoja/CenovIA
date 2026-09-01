@@ -192,35 +192,43 @@ Apresente-se brevemente e pergunte o que o aluno gostaria de aprender hoje. Agua
 
       } else if (geminiWs && geminiWs.readyState === WebSocket.OPEN) {
         if (msg.type === 'audio_chunk') {
-          // Use the mimeType from the message (webm/opus on web, pcm on native)
+          // Usa clientContent.turns com inlineData ao invés de realtimeInput.
+          // Isso garante que o modelo gere uma resposta (realtimeInput depende de VAD automático).
           const mimeType = msg.mimeType || 'audio/pcm;rate=16000';
-          const geminiFormat = {
-            realtimeInput: {
-              mediaChunks: [{
-                mimeType,
-                data: msg.data
-              }]
-            }
-          };
-          geminiWs.send(JSON.stringify(geminiFormat));
+          const base64Data = msg.data as string;
+
+          // Validação: precisa ter dado real
+          if (!base64Data || base64Data.length < 10) {
+            console.warn('[RELAY] audio_chunk vazio ou muito pequeno, ignorando');
+          } else {
+            console.log(`[RELAY] Enviando audio ao Gemini: ${base64Data.length} chars base64, mimeType=${mimeType}`);
+            const geminiFormat = {
+              clientContent: {
+                turns: [{
+                  role: 'user',
+                  parts: [{
+                    inlineData: {
+                      mimeType,
+                      data: base64Data
+                    }
+                  }]
+                }],
+                turnComplete: true
+              }
+            };
+            geminiWs.send(JSON.stringify(geminiFormat));
+          }
         } else if (msg.type === 'text_message') {
           const geminiFormat = {
             clientContent: {
-              turns: [{
-                role: "user",
-                parts: [{ text: msg.text }]
-              }],
+              turns: [{ role: 'user', parts: [{ text: msg.text }] }],
               turnComplete: true
             }
           };
           geminiWs.send(JSON.stringify(geminiFormat));
         } else if (msg.type === 'turn_complete') {
-          const geminiFormat = {
-            clientContent: {
-              turnComplete: true
-            }
-          };
-          geminiWs.send(JSON.stringify(geminiFormat));
+          // No-op: turnComplete já é enviado junto com o audio_chunk acima
+          console.log('[RELAY] turn_complete recebido (ignorado — já foi enviado com audio)');
         }
       }
     } catch (error) {
