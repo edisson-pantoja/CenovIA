@@ -150,8 +150,14 @@ function ClassroomScreen() {
 
     try {
       if (Platform.OS === 'web' && WebAudioRecorder.isSupported()) {
+        // Configura o callback de streaming ANTES de iniciar a gravação
+        // Cada chunk de ~256ms será enviado imediatamente ao Gemini (realtimeInput)
+        webAudioRecorder.onChunk = (base64: string, mimeType: string) => {
+          geminiClient.sendAudioChunk(base64, mimeType);
+        };
         const ok = await webAudioRecorder.start();
         if (!ok) {
+          webAudioRecorder.onChunk = undefined;
           Alert.alert('Permissão necessária', 'Permita o acesso ao microfone no navegador.');
           return;
         }
@@ -175,22 +181,15 @@ function ClassroomScreen() {
 
     try {
       if (Platform.OS === 'web' && WebAudioRecorder.isSupported()) {
-        // Web: usa MediaRecorder nativo do browser
-        const result = await webAudioRecorder.stop();
-        if (result && geminiClient.isConnected) {
-          const { blob, mimeType } = result;
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            const base64 = (reader.result as string).split(',')[1];
-            geminiClient.sendAudioChunk(base64, mimeType);
-            geminiClient.sendTurnComplete();
-          };
-          reader.readAsDataURL(blob);
+        // Streaming já foi feito durante a gravação — apenas para e envia turn_complete
+        await webAudioRecorder.stop();
+        if (geminiClient.isConnected) {
+          geminiClient.sendTurnComplete();
         } else {
           setTeacherState('idle');
         }
       } else {
-        // Native (iOS/Android): usa expo-av
+        // Native (iOS/Android): usa expo-av em lote
         const uri = await audioManager.stopRecording();
         if (uri && geminiClient.isConnected) {
           const response = await fetch(uri);
