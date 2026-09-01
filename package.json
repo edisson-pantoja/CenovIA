@@ -9,6 +9,7 @@
     "packages/backend"
   ],
   "scripts": {
+    "build": "npm run backend:build",
     "mobile": "npm run start --workspace=apps/mobile",
     "backend": "npm run dev --workspace=packages/backend",
     "backend:build": "npm run build --workspace=packages/backend",
