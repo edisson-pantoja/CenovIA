@@ -244,12 +244,8 @@ Ao iniciar a sessão, cumprimente o aluno de forma calorosa e pergunte o que ele
 
       } else if (geminiWs && geminiWs.readyState === WebSocket.OPEN) {
         if (msg.type === 'ptt_start') {
-          // Usuário pressionou o botão: sinaliza início de fala ao Gemini
-          console.log('[RELAY] PTT Start → activityStart');
-          geminiWs.send(JSON.stringify({
-            realtimeInput: { activityStart: {} }
-          }));
-
+          // Usuário pressionou o botão: no raw websocket, apenas começamos a enviar audio_chunks
+          console.log('[RELAY] PTT Start recebido');
         } else if (msg.type === 'audio_chunk') {
           const mimeType = msg.mimeType || 'audio/pcm;rate=16000';
           const base64Data = msg.data as string;
@@ -266,9 +262,9 @@ Ao iniciar a sessão, cumprimente o aluno de forma calorosa e pergunte o que ele
 
         } else if (msg.type === 'turn_complete') {
           // Usuário soltou o botão: sinaliza fim de fala → Gemini responde
-          console.log('[RELAY] PTT End → activityEnd');
+          console.log('[RELAY] PTT End → turnComplete');
           geminiWs.send(JSON.stringify({
-            realtimeInput: { activityEnd: {} }
+            clientContent: { turnComplete: true }
           }));
 
         } else if (msg.type === 'text_message') {
