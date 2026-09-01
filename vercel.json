@@ -1,0 +1,9 @@
+{
+  "buildCommand": "npm run build --workspace=apps/mobile",
+  "outputDirectory": "apps/mobile/dist",
+  "installCommand": "npm install --legacy-peer-deps",
+  "framework": null,
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}
