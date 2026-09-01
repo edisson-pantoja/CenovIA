@@ -33,7 +33,6 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   plugins: [
     'expo-router',
     'expo-av',
-    'lottie-react-native',
     '@shopify/react-native-skia'
   ],
   experiments: {
