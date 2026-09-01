@@ -33,7 +33,6 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   plugins: [
     'expo-router',
     'expo-av',
-    '@shopify/react-native-skia'
   ],
   experiments: {
     typedRoutes: true

@@ -14,7 +14,7 @@ router.get('/:userId', authenticateToken, async (req, res) => {
     }
 
     const month = new Date().toISOString().slice(0, 7);
-    const usage = await UsageService.getUserUsage(userId, month);
+    const usage = await UsageService.getUserUsage(userId as string, month);
     
     res.json(usage);
   } catch (error) {
