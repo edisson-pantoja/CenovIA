@@ -91,8 +91,8 @@ function ClassroomScreen() {
       }, 1000);
     };
 
-    geminiClient.onAudioChunk = async (data, timestampMs) => {
-      await audioManager.playAudioChunk(data, timestampMs);
+    geminiClient.onAudioChunk = async (data, timestampMs, mimeType) => {
+      await audioManager.playAudioChunk(data, timestampMs, mimeType);
     };
 
     geminiClient.onBoardEvent = (event) => {

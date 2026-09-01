@@ -23,7 +23,7 @@ export class GeminiLiveClient {
 
   onConnected: () => void = () => {};
   onSessionReady: (sessionId: string, usage: UserUsage) => void = () => {};
-  onAudioChunk: (data: string, timestampMs: number) => void = () => {};
+  onAudioChunk: (data: string, timestampMs: number, mimeType?: string) => void = () => {};
   onBoardEvent: (event: BoardEvent) => void = () => {};
   onTeacherStateChange: (state: TeacherState) => void = () => {};
   onUsageUpdate: (usage: UserUsage) => void = () => {};
@@ -157,7 +157,7 @@ export class GeminiLiveClient {
 
       case 'audio_chunk':
         // Chunk de áudio da professora — repassa para o AudioManager
-        this.onAudioChunk(msg.data, msg.timestampMs);
+        this.onAudioChunk(msg.data, msg.timestampMs, msg.mimeType);
         this.onTeacherStateChange('speaking');
         break;
 

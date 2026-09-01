@@ -75,10 +75,10 @@ export class AudioManager {
   private activeSources: AudioBufferSourceNode[] = [];
 
   /**
-   * Toca um chunk de áudio PCM base64 (24kHz, 16-bit, mono) vindo do Gemini.
+   * Toca um chunk de áudio PCM base64 vindo do Gemini.
    * Os chunks são enfileirados para reprodução contínua sem falhas (gapless).
    */
-  async playAudioChunk(base64Pcm: string, timestampMs: number): Promise<void> {
+  async playAudioChunk(base64Pcm: string, timestampMs: number, mimeType?: string): Promise<void> {
     try {
       const ctx = this.getPlaybackContext();
 
@@ -86,7 +86,16 @@ export class AudioManager {
         await ctx.resume();
       }
 
-      const audioBuffer = pcmBase64ToAudioBuffer(base64Pcm, 24000, ctx);
+      // Default para 24000 (padrão do Gemini 2.5), mas tenta extrair do mimeType (ex: "audio/pcm;rate=16000")
+      let rate = 24000;
+      if (mimeType) {
+        const match = mimeType.match(/rate=(\d+)/);
+        if (match && match[1]) {
+          rate = parseInt(match[1], 10);
+        }
+      }
+
+      const audioBuffer = pcmBase64ToAudioBuffer(base64Pcm, rate, ctx);
 
       const source = ctx.createBufferSource();
       source.buffer = audioBuffer;
