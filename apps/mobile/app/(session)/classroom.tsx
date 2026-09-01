@@ -148,10 +148,6 @@ function ClassroomScreen() {
   const handlePTTStart = useCallback(async () => {
     if (!isConnected || usageLimitReached) return;
 
-    // Interrompe a professora se ela estiver falando
-    audioManager.clearPlayback();
-    geminiClient.sendInterrupt();
-
     try {
       if (Platform.OS === 'web' && WebAudioRecorder.isSupported()) {
         const ok = await webAudioRecorder.start();
@@ -162,6 +158,8 @@ function ClassroomScreen() {
       } else {
         await audioManager.startRecording();
       }
+      // Para a fala atual da professora ao pressionar o botão
+      audioManager.clearPlayback();
       setIsRecording(true);
       setTeacherState('listening');
       setReplayTimeMs(undefined);
