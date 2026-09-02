@@ -20,7 +20,6 @@ import {
   Platform,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import * as FileSystem from 'expo-file-system';
 import { useAuth } from '../../context/AuthContext';
 import { useSession } from '../../context/SessionContext';
 import { geminiClient } from '../../lib/gemini-live-client';
@@ -30,7 +29,10 @@ import type { BoardEvent, TeacherState, UserUsage } from '@cenovia/shared';
 
 import TeacherAvatar from '../../components/TeacherAvatar/TeacherAvatar';
 import SpeakingIndicator from '../../components/TeacherAvatar/SpeakingIndicator';
-import ChalkBoard from '../../components/ChalkBoard/ChalkBoard';
+// ChalkBoardWrapper escolhe automaticamente a versão correta por plataforma:
+// - ChalkBoardWrapper.web.tsx → Canvas HTML5 (web/Vercel)
+// - ChalkBoardWrapper.tsx → Skia nativo (iOS/Android)
+import ChalkBoardWrapper from '../../components/ChalkBoard/ChalkBoardWrapper';
 import AudioReplayPlayer from '../../components/AudioReplayPlayer';
 import UsageBanner from '../../components/UsageBanner';
 
@@ -156,20 +158,34 @@ export default function ClassroomScreen() {
     setIsRecording(false);
     setTeacherState('thinking');
 
-    const uri = await audioManager.stopRecording();
-    if (uri && geminiClient.isConnected) {
-      // Para o MVP, lemos o arquivo e enviamos como base64
-      // Em produção, implementar streaming de chunks em tempo real
-      try {
-        // Usa expo-file-system para ler como base64, muito mais estável no React Native
-        const base64 = await FileSystem.readAsStringAsync(uri, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-        geminiClient.sendAudioChunk(base64);
-      } catch (err) {
-        console.error('[CLASSROOM] Erro ao enviar áudio:', err);
+    // Bloco nativo (iOS/Android) — web usa streaming em tempo real via onChunk
+    if (Platform.OS !== 'web') {
+      const uri = await audioManager.stopRecording();
+      if (uri && geminiClient.isConnected) {
+        try {
+          const response = await fetch(uri);
+          const blob = await response.blob();
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const base64 = (reader.result as string).split(',')[1];
+            if (base64) geminiClient.sendAudioChunk(base64, 'audio/pcm;rate=16000');
+            geminiClient.sendTurnComplete();
+          };
+          reader.readAsDataURL(blob);
+        } catch (err) {
+          console.error('[CLASSROOM] Erro ao enviar áudio nativo:', err);
+          setTeacherState('idle');
+        }
+      } else {
         setTeacherState('idle');
       }
+      return;
+    }
+
+    // Web: streaming já enviado em tempo real durante PTT; apenas para a gravação
+    await webAudioRecorder.stop();
+    if (geminiClient.isConnected) {
+      geminiClient.sendTurnComplete();
     } else {
       setTeacherState('idle');
     }
@@ -236,7 +252,7 @@ export default function ClassroomScreen() {
 
         {/* ── Metade inferior: Quadro verde ───────────────────────── */}
         <View style={styles.boardSection}>
-          <ChalkBoard
+          <ChalkBoardWrapper
             events={boardEvents}
             replayTimeMs={replayTimeMs}
           />
