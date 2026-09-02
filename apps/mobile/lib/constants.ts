@@ -5,7 +5,7 @@ export const FREE_TIER_MINUTES = 30;
 const baseBackendUrl = ((process.env.EXPO_PUBLIC_BACKEND_URL || Constants.expoConfig?.extra?.backendUrl) || 'http://localhost:3001').replace(/\/$/, '');
 
 // If backendUrl is http/https, we convert to ws/wss for the websocket
-const baseWsUrl = baseBackendUrl.replace(/^http/, 'ws');
+const baseWsUrl = baseBackendUrl.includes('localhost') ? baseBackendUrl.replace(/^http/, 'ws') : baseBackendUrl.replace(/^https?/, 'wss');
 
 export const BACKEND_API_URL = baseBackendUrl;
 export const BACKEND_WS_URL = baseWsUrl;
