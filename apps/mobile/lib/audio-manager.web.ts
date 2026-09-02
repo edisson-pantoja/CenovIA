@@ -8,7 +8,9 @@
  * Saída:    PCM 16-bit, 24kHz, mono (do Gemini) → tocado via AudioContext
  */
 
-import { AVPlaybackStatus } from 'expo-av';
+// Na versão web não usamos expo-av (nativo). Definimos o tipo localmente para
+// manter compatibilidade com a interface genérica de AudioManager.
+type AVPlaybackStatus = { isLoaded: boolean };
 
 type AudioChunkCallback = (base64Chunk: string) => void;
 
