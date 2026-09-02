@@ -58,7 +58,11 @@ export default function ClassroomScreen() {
   // ── Conectar ao backend relay ─────────────────────────────────────────────
 
   useEffect(() => {
-    if (!session?.access_token || !studyContext) return;
+    if (!session?.access_token) return;
+    if (!studyContext) {
+      router.replace('/(auth)/onboarding');
+      return;
+    }
 
     connectToSession();
 
