@@ -35,6 +35,7 @@ import SpeakingIndicator from '../../components/TeacherAvatar/SpeakingIndicator'
 import ChalkBoardWrapper from '../../components/ChalkBoard/ChalkBoardWrapper';
 import AudioReplayPlayer from '../../components/AudioReplayPlayer';
 import UsageBanner from '../../components/UsageBanner';
+import { webAudioRecorder, WebAudioRecorder } from '../../lib/audio-recorder';
 
 export default function ClassroomScreen() {
   const router = useRouter();
@@ -144,10 +145,24 @@ export default function ClassroomScreen() {
   const handlePTTStart = useCallback(async () => {
     if (!isConnected || usageLimitReached) return;
     try {
-      await audioManager.startRecording();
+      if (Platform.OS === 'web' && WebAudioRecorder.isSupported()) {
+        geminiClient.sendPTTStart();
+        webAudioRecorder.onChunk = (base64: string, mimeType: string) => {
+          geminiClient.sendAudioChunk(base64, mimeType);
+        };
+        const ok = await webAudioRecorder.start();
+        if (!ok) {
+          webAudioRecorder.onChunk = undefined;
+          Alert.alert('Permissão necessária', 'Permita o acesso ao microfone no navegador.');
+          return;
+        }
+      } else {
+        await audioManager.startRecording();
+      }
+      audioManager.clearPlayback();
       setIsRecording(true);
       setTeacherState('listening');
-      setReplayTimeMs(undefined); // Sai do modo replay ao falar
+      setReplayTimeMs(undefined);
     } catch (err) {
       Alert.alert('Permissão necessária', 'Habilite o microfone nas configurações do dispositivo.');
     }
@@ -158,11 +173,17 @@ export default function ClassroomScreen() {
     setIsRecording(false);
     setTeacherState('thinking');
 
-    // Bloco nativo (iOS/Android) — web usa streaming em tempo real via onChunk
-    if (Platform.OS !== 'web') {
-      const uri = await audioManager.stopRecording();
-      if (uri && geminiClient.isConnected) {
-        try {
+    try {
+      if (Platform.OS === 'web' && WebAudioRecorder.isSupported()) {
+        await webAudioRecorder.stop();
+        if (geminiClient.isConnected) {
+          geminiClient.sendTurnComplete();
+        } else {
+          setTeacherState('idle');
+        }
+      } else {
+        const uri = await audioManager.stopRecording();
+        if (uri && geminiClient.isConnected) {
           const response = await fetch(uri);
           const blob = await response.blob();
           const reader = new FileReader();
@@ -172,21 +193,12 @@ export default function ClassroomScreen() {
             geminiClient.sendTurnComplete();
           };
           reader.readAsDataURL(blob);
-        } catch (err) {
-          console.error('[CLASSROOM] Erro ao enviar áudio nativo:', err);
+        } else {
           setTeacherState('idle');
         }
-      } else {
-        setTeacherState('idle');
       }
-      return;
-    }
-
-    // Web: streaming já enviado em tempo real durante PTT; apenas para a gravação
-    await webAudioRecorder.stop();
-    if (geminiClient.isConnected) {
-      geminiClient.sendTurnComplete();
-    } else {
+    } catch (err) {
+      console.error('[CLASSROOM] Erro ao parar gravação:', err);
       setTeacherState('idle');
     }
   }, [isRecording]);
