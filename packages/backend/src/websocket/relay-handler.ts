@@ -50,7 +50,7 @@ Ao iniciar a sessão, cumprimente o aluno de forma calorosa e pergunte o que ele
 
       const setupMessage = {
         setup: {
-          model: 'models/gemini-2.5-flash-native-audio-latest',
+          model: 'models/gemini-2.0-flash-live-preview-04-09',
           systemInstruction: {
             parts: [{ text: systemInstruction }]
           },
@@ -132,6 +132,12 @@ Ao iniciar a sessão, cumprimente o aluno de forma calorosa e pergunte o que ele
 
       try {
         const geminiJson = JSON.parse(geminiMsgStr);
+
+          if (geminiJson.error) {
+            console.error('[RELAY] Gemini API retornou erro:', JSON.stringify(geminiJson.error));
+            clientWs.send(JSON.stringify({ type: 'error', code: 'GEMINI_API_ERROR', message: geminiJson.error.message || 'Erro na API da IA' }));
+            return;
+          }
 
         // setupComplete: notifica o cliente que a sessão está pronta
         if (geminiJson.setupComplete && userId) {
