@@ -12,6 +12,7 @@ export const handleRelayConnection = (clientWs: WebSocket, request: IncomingMess
   let usageInterval: NodeJS.Timeout | null = null;
   let keepaliveInterval: NodeJS.Timeout | null = null;
   let isAuthenticated = false;
+  let hasInputInCurrentTurn = false;
   let studyContext: any = null;
 
   /** Fecha tudo (chamado somente quando o cliente desconecta) */
@@ -259,6 +260,7 @@ Ao iniciar a sessão, cumprimente o aluno de forma calorosa e pergunte o que ele
           if (!base64Data || base64Data.length < 10) {
             console.warn('[RELAY] audio_chunk vazio, ignorando');
           } else {
+            hasInputInCurrentTurn = true;
             geminiWs.send(JSON.stringify({
               realtimeInput: {
                 mediaChunks: [{ mimeType, data: base64Data }]
@@ -267,13 +269,20 @@ Ao iniciar a sessão, cumprimente o aluno de forma calorosa e pergunte o que ele
           }
 
         } else if (msg.type === 'turn_complete') {
-          // Usuário soltou o botão: sinaliza fim de fala → Gemini responde
-          console.log('[RELAY] PTT End → turnComplete');
-          geminiWs.send(JSON.stringify({
-            clientContent: { turnComplete: true }
-          }));
+          // Usuário soltou o botão: sinaliza fim de fala -> Gemini responde
+          console.log('[RELAY] PTT End -> turnComplete');
+          if (hasInputInCurrentTurn) {
+            geminiWs.send(JSON.stringify({
+              clientContent: { turnComplete: true }
+            }));
+            hasInputInCurrentTurn = false;
+          } else {
+            console.warn('[RELAY] turn_complete recebido mas sem nenhum chunk de input. Forçando state idle.');
+            clientWs.send(JSON.stringify({ type: 'teacher_state', state: 'idle' }));
+          }
 
         } else if (msg.type === 'text_message') {
+          hasInputInCurrentTurn = false;
           geminiWs.send(JSON.stringify({
             clientContent: {
               turns: [{ role: 'user', parts: [{ text: msg.text }] }],

@@ -6,9 +6,7 @@ const config = {
   geminiApiKey: process.env.GEMINI_API_KEY,
   supabaseUrl: process.env.SUPABASE_URL,
   supabaseServiceKey: process.env.SUPABASE_SERVICE_KEY,
-  freeTierMinutesPerMonth: process.env.FREE_TIER_MINUTES_PER_MONTH 
-    ? parseInt(process.env.FREE_TIER_MINUTES_PER_MONTH, 10) 
-    : 30,
+  freeTierMinutesPerMonth: parseInt(process.env.FREE_TIER_MINUTES_PER_MONTH || '30', 10) || 30,
   corsOrigin: process.env.CORS_ORIGIN || '*'
 };
 
