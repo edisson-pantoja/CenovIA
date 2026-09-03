@@ -50,7 +50,7 @@ Ao iniciar a sessão, cumprimente o aluno de forma calorosa e pergunte o que ele
 
       const setupMessage = {
         setup: {
-          model: 'models/gemini-2.0-flash-live-preview-04-09',
+          model: 'models/gemini-2.5-flash-native-audio-latest',
           systemInstruction: {
             parts: [{ text: systemInstruction }]
           },
