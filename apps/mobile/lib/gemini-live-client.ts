@@ -18,6 +18,7 @@ export class GeminiLiveClient {
   private reconnectAttempts = 0;
   private readonly maxReconnectAttempts = 3;
   private isIntentionalClose = false;
+  private thinkTimeout: NodeJS.Timeout | null = null;
 
   // ── Callbacks públicos ─────────────────────────────────────────────────────
 
@@ -160,17 +161,23 @@ export class GeminiLiveClient {
         break;
 
       case 'audio_chunk':
+        if (this.thinkTimeout) clearTimeout(this.thinkTimeout);
+        if (this.thinkTimeout) clearTimeout(this.thinkTimeout);
         // Chunk de áudio da professora — repassa para o AudioManager
         this.onAudioChunk(msg.data, msg.timestampMs, msg.mimeType);
         this.onTeacherStateChange('speaking');
         break;
 
       case 'board_event':
+        if (this.thinkTimeout) clearTimeout(this.thinkTimeout);
+        if (this.thinkTimeout) clearTimeout(this.thinkTimeout);
         // Evento de desenho no quadro verde
         this.onBoardEvent(msg.event);
         break;
 
       case 'teacher_state':
+        if (this.thinkTimeout) clearTimeout(this.thinkTimeout);
+        if (this.thinkTimeout) clearTimeout(this.thinkTimeout);
         this.onTeacherStateChange(msg.state);
         break;
 
