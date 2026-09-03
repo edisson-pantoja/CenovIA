@@ -28,9 +28,11 @@ function RootLayoutNav() {
     if (loading) return;
 
     const inAuthGroup = segments[0] === '(auth)';
+    const isWelcomeOrSignIn = segments[1] === 'welcome' || segments[1] === 'sign-in';
+    
     if (!session && !inAuthGroup) {
       router.replace('/(auth)/welcome');
-    } else if (session && inAuthGroup) {
+    } else if (session && inAuthGroup && isWelcomeOrSignIn) {
       router.replace('/');
     }
   }, [session, loading, segments, router]);
