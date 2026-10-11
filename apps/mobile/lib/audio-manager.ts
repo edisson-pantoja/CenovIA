@@ -62,6 +62,7 @@ export class AudioManager {
           audioQuality: Audio.IOSAudioQuality.HIGH,
           sampleRate: 16000,
           numberOfChannels: 1,
+          bitRate: 128000,
           bitRateStrategy: Audio.IOSBitRateStrategy.CONSTANT,
           linearPCMBitDepth: 16,
           linearPCMIsBigEndian: false,
@@ -132,6 +133,20 @@ export class AudioManager {
       this.sound = sound;
     } catch (err) {
       console.error('[AUDIO] Erro ao tocar chunk:', err);
+    }
+  }
+
+  /** Interrompe a reprodução imediatamente e limpa o som ativo */
+  async clearPlayback(): Promise<void> {
+    try {
+      if (this.sound) {
+        await this.sound.stopAsync();
+        await this.sound.unloadAsync();
+        this.sound = null;
+      }
+    } catch (err) {
+      console.warn('[AUDIO] Erro ao limpar playback:', err);
+      this.sound = null;
     }
   }
 

@@ -67,7 +67,8 @@ export type BoardEventType =
   | 'svg_path'
   | 'clear'
   | 'highlight'
-  | 'erase_element';
+  | 'erase_element'
+  | 'note_box';
 
 export interface BoundingBox {
   x: number;
@@ -89,6 +90,7 @@ export interface TextBoardEvent extends BaseBoardEvent {
   y: number;           // 0-1 (proporcional à altura do quadro)
   fontSize?: number;   // em unidades relativas
   color?: string;      // default: "#F5F5DC" (chalk white)
+  variant?: 'title' | 'text' | 'underline';
 }
 
 export interface LatexBoardEvent extends BaseBoardEvent {
@@ -130,6 +132,14 @@ export interface EraseElementBoardEvent extends BaseBoardEvent {
   elementId: string; // ID do evento a ser apagado
 }
 
+export interface NoteBoxBoardEvent extends BaseBoardEvent {
+  type: 'note_box';
+  content: string;
+  x: number;
+  y: number;
+  color?: string;
+}
+
 export type BoardEvent =
   | TextBoardEvent
   | LatexBoardEvent
@@ -137,7 +147,8 @@ export type BoardEvent =
   | SvgPathBoardEvent
   | ClearBoardEvent
   | HighlightBoardEvent
-  | EraseElementBoardEvent;
+  | EraseElementBoardEvent
+  | NoteBoxBoardEvent;
 
 // -----------------------------------------------------------
 // Protocolo WebSocket (Client ↔ Backend Relay)
@@ -146,26 +157,32 @@ export type BoardEvent =
 // Mensagens Client → Server
 export type ClientMessage =
   | { type: 'session_start'; context: StudyContext; token: string }
-  | { type: 'audio_chunk'; data: string; mimeType: 'audio/pcm' }
+  | { type: 'audio_chunk'; data: string; mimeType?: string }
   | { type: 'text_message'; text: string }
-  | { type: 'session_end' };
+  | { type: 'image_message'; data: string; mimeType?: string; text?: string }
+  | { type: 'session_end' }
+  | { type: 'ptt_start' }
+  | { type: 'turn_complete' };
 
 // Mensagens Server → Client
 export type ServerMessage =
   | { type: 'session_ready'; sessionId: string; usage: UserUsage }
-  | { type: 'audio_chunk'; data: string; timestampMs: number }
+  | { type: 'audio_chunk'; data: string; timestampMs: number; mimeType?: string }
   | { type: 'board_event'; event: BoardEvent }
   | { type: 'teacher_state'; state: TeacherState }
   | { type: 'usage_update'; usage: UserUsage }
   | { type: 'usage_limit_reached'; minutesLimit: number }
   | { type: 'error'; code: ErrorCode; message: string };
 
-export type TeacherState = 'idle' | 'listening' | 'thinking' | 'speaking';
+export type TeacherState = 'idle' | 'listening' | 'thinking' | 'speaking' | 'interrupted' | 'reconnecting';
 
 export type ErrorCode =
   | 'AUTH_FAILED'
   | 'USAGE_LIMIT_REACHED'
   | 'GEMINI_ERROR'
+  | 'GEMINI_API_ERROR'
+  | 'GEMINI_DISCONNECTED'
+  | 'TIMEOUT'
   | 'SESSION_NOT_FOUND'
   | 'INTERNAL_ERROR';
 

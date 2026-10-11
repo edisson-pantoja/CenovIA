@@ -11,13 +11,14 @@ export default function SpeakingIndicator({ state }: { state: TeacherState }) {
     };
   });
 
-  if (state === 'idle') return null;
+  if (state === 'idle' || state === 'interrupted') return null;
 
   return (
     <Animated.View style={[styles.container, animatedStyle]}>
       {state === 'listening' && <Text style={styles.text}>Ouvindo...</Text>}
       {state === 'thinking' && <Text style={styles.text}>Pensando...</Text>}
       {state === 'speaking' && <Text style={styles.text}>Falando...</Text>}
+      {state === 'reconnecting' && <Text style={[styles.text, { color: '#f59e0b' }]}>Reconectando...</Text>}
     </Animated.View>
   );
 }

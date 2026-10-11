@@ -7,7 +7,8 @@ const config = {
   supabaseUrl: process.env.SUPABASE_URL,
   supabaseServiceKey: process.env.SUPABASE_SERVICE_KEY,
   freeTierMinutesPerMonth: parseInt(process.env.FREE_TIER_MINUTES_PER_MONTH || '30', 10) || 30,
-  corsOrigin: process.env.CORS_ORIGIN || '*'
+  corsOrigin: process.env.CORS_ORIGIN || '*',
+  geminiModel: process.env.GEMINI_MODEL || 'gemini-3.8-live'
 };
 
 if (!config.geminiApiKey) {

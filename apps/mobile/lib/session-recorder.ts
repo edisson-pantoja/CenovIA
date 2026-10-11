@@ -1,4 +1,4 @@
-import { BoardEvent } from './gemini-live-client';
+import type { BoardEvent } from '@cenovia/shared';
 
 export interface SessionChunk {
   audioBase64: string;

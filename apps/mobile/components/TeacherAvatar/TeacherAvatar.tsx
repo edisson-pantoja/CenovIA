@@ -2,8 +2,9 @@ import React, { useRef, useEffect } from 'react';
 import { View, StyleSheet } from 'react-native';
 import LottieView from 'lottie-react-native';
 import SpeakingIndicator from './SpeakingIndicator';
+import type { TeacherState } from '@cenovia/shared';
 
-export type TeacherState = 'idle' | 'listening' | 'thinking' | 'speaking';
+export type { TeacherState };
 
 interface TeacherAvatarProps {
   state: TeacherState;

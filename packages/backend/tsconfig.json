@@ -11,7 +11,7 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "paths": {
-      "@cenovia/shared": ["../shared/src"]
+      "@cenovia/shared": ["../shared/dist/index"]
     }
   },
   "include": ["src/**/*"],

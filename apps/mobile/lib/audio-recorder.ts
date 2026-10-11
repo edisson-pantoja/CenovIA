@@ -5,6 +5,7 @@
  */
 
 export class WebAudioRecorder {
+  onChunk?: (base64: string, mimeType: string) => void;
   static isSupported(): boolean {
     return false; // Native uses expo-av directly
   }

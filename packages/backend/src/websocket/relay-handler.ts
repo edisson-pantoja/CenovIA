@@ -2,6 +2,7 @@ import { WebSocket } from 'ws';
 import { IncomingMessage } from 'http';
 import { verifyWebSocketToken } from '../middleware/auth';
 import { UsageService } from '../services/usage-service';
+import { normalizeBoardCall } from './board-normalizer';
 import config from '../config';
 
 const GEMINI_WS_URL = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${config.geminiApiKey}`;
@@ -11,12 +12,21 @@ export const handleRelayConnection = (clientWs: WebSocket, request: IncomingMess
   let userId: string | null = null;
   let usageInterval: NodeJS.Timeout | null = null;
   let keepaliveInterval: NodeJS.Timeout | null = null;
+  let reconnectTimeout: NodeJS.Timeout | null = null;
   let isAuthenticated = false;
   let hasInputInCurrentTurn = false;
   let studyContext: any = null;
+  let sessionStartMs = Date.now();
+  let resumptionHandle: string | null = null;
+  let isInitialConnection = true;
+  let reconnectAttempts = 0;
 
   /** Fecha tudo (chamado somente quando o cliente desconecta) */
   const fullCleanup = () => {
+    if (reconnectTimeout) {
+      clearTimeout(reconnectTimeout);
+      reconnectTimeout = null;
+    }
     if (keepaliveInterval) clearInterval(keepaliveInterval);
     if (usageInterval) clearInterval(usageInterval);
     if (geminiWs && geminiWs.readyState === WebSocket.OPEN) geminiWs.close();
@@ -29,8 +39,50 @@ export const handleRelayConnection = (clientWs: WebSocket, request: IncomingMess
   /** Fecha somente a conexão Gemini (mantém o frontend vivo) */
   const closeGeminiOnly = () => {
     if (keepaliveInterval) { clearInterval(keepaliveInterval); keepaliveInterval = null; }
-    if (geminiWs && geminiWs.readyState === WebSocket.OPEN) { geminiWs.close(); }
-    geminiWs = null;
+    if (geminiWs) {
+      geminiWs.removeAllListeners();
+      if (geminiWs.readyState === WebSocket.OPEN) {
+        geminiWs.close();
+      }
+      geminiWs = null;
+    }
+  };
+
+  /** Agenda reconexão com backoff exponencial (1s, 2s, 4s, máx 3 tentativas) */
+  const scheduleReconnect = () => {
+    if (reconnectTimeout) {
+      clearTimeout(reconnectTimeout);
+      reconnectTimeout = null;
+    }
+    closeGeminiOnly();
+
+    if (clientWs.readyState !== WebSocket.OPEN) return;
+
+    if (reconnectAttempts >= 3) {
+      console.error('[RELAY] Máximo de 3 tentativas de reconexão atingido.');
+      clientWs.send(JSON.stringify({
+        type: 'error',
+        code: 'GEMINI_DISCONNECTED',
+        message: 'Conexão com a IA perdida após várias tentativas.'
+      }));
+      return;
+    }
+
+    reconnectAttempts++;
+    const backoffMs = Math.pow(2, reconnectAttempts - 1) * 1000;
+    console.log(`[RELAY] Reconectando ao Gemini em ${backoffMs}ms (tentativa ${reconnectAttempts}/3, handle=${resumptionHandle || 'novo'})...`);
+
+    clientWs.send(JSON.stringify({
+      type: 'teacher_state',
+      state: 'reconnecting'
+    }));
+
+    reconnectTimeout = setTimeout(() => {
+      reconnectTimeout = null;
+      if (clientWs.readyState === WebSocket.OPEN) {
+        connectToGemini(studyContext);
+      }
+    }, backoffMs);
   };
 
   /** Monta e conecta ao Gemini Live API */
@@ -40,37 +92,65 @@ export const handleRelayConnection = (clientWs: WebSocket, request: IncomingMess
     geminiWs = new WebSocket(GEMINI_WS_URL);
 
     geminiWs.on('open', async () => {
-      console.log(`[RELAY] Connected to Gemini for user ${userId}`);
+      console.log(`[RELAY] Conectado ao Gemini Live para usuário ${userId} (resumed=${!isInitialConnection}, handle=${resumptionHandle || 'none'})`);
 
       const systemInstruction = `Você é CenovIA, uma professora particular afetuosa, paciente e muito didática de ${context?.subjectName || 'várias matérias'} para ${context?.gradeLabel || 'o aluno'}.
-Responda SEMPRE em português do Brasil, com linguagem clara e adequada para o nível do aluno.
-Quando explicar algo que precisa de visualização (fórmulas, diagramas, estruturas), use a função draw_board.
+Responda SEMPRE em português do Brasil, com linguagem clara, acolhedora e adequada para o nível do aluno.
+Quando explicar algo que precisa de visualização, fórmulas ou anotações, use SEMPRE a ferramenta draw_board.
+Regras fundamentais de uso do quadro verde:
+- Sempre que for começar uma nova explicação, mudar de tópico ou responder uma nova dúvida do aluno, use SEMPRE clear: true para apagar o quadro anterior antes de escrever.
+- Use bem todo o espaço horizontal do quadro! Comece escrevendo do lado esquerdo (x entre 0.05 e 0.40) para o tema, título e fórmula principal. Use o lado centro-direito (x entre 0.45 e 0.85) para exemplos resolvidos e caixas de resumo.
+- NUNCA empilhe tudo no lado direito do quadro. Espalhe os elementos harmoniosamente pelo quadro (x entre 0.05 e 0.85, y entre 0.08 e 0.85).
+- Toda fórmula matemática vai como kind: 'latex' (escreva o código LaTeX sem cifrões $).
+- Use kind: 'title' amarelo no topo esquerdo (x: 0.05, y: 0.08) para o tema da explicação.
+- Use kind: 'note_box' rosa para resumos, destaques e caixas 'Lembre-se:'.
+- Escreva no quadro ANTES de explicar em voz.
 Se o aluno interromper você, pare de falar imediatamente e escute.
 Seja encorajadora e positiva. Celebre quando o aluno acertar.
 Ao iniciar a sessão, cumprimente o aluno de forma calorosa e pergunte o que ele gostaria de aprender hoje.`;
 
+      const modelName = config.geminiModel.startsWith('models/')
+        ? config.geminiModel
+        : `models/${config.geminiModel}`;
+
       const setupMessage = {
         setup: {
-          model: 'models/gemini-2.5-flash-native-audio-latest',
+          model: modelName,
+          ...(resumptionHandle
+            ? { sessionResumption: { handle: resumptionHandle } }
+            : { sessionResumption: {} }),
+          contextWindowCompression: {
+            slidingWindow: {}
+          },
           systemInstruction: {
             parts: [{ text: systemInstruction }]
           },
           tools: [{
             functionDeclarations: [{
               name: 'draw_board',
-              description: 'Escreve ou desenha algo no quadro verde enquanto explica',
+              description: 'Escreve no quadro verde. Use SEMPRE que explicar algo visual. Pode enviar vários elementos de uma vez.',
               parameters: {
                 type: 'object',
                 properties: {
-                  type: { type: 'string', enum: ['text', 'latex', 'smiles', 'svg_path', 'clear'] },
-                  content: { type: 'string', description: 'Texto, LaTeX, SMILES ou SVG path data' },
-                  x: { type: 'number', description: 'Posição X de 0 a 1' },
-                  y: { type: 'number', description: 'Posição Y de 0 a 1' },
-                  label: { type: 'string' }
+                  clear: { type: 'boolean', description: 'true para apagar o quadro antes de escrever' },
+                  elements: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        kind: { type: 'string', enum: ['title', 'text', 'latex', 'note_box', 'underline'] },
+                        content: { type: 'string', description: 'Texto ou LaTeX (sem $). Em note_box, linhas separadas por \\n' },
+                        color: { type: 'string', enum: ['white', 'yellow', 'pink', 'blue', 'green'] },
+                        x: { type: 'number', description: '0 a 1 (esquerda→direita)' },
+                        y: { type: 'number', description: '0 a 1 (topo→base)' },
+                      },
+                      required: ['kind', 'content'],
+                    },
+                  },
                 },
-                required: ['type', 'content']
-              }
-            }]
+                required: ['elements'],
+              },
+            }],
           }],
           // Desabilita o VAD automático para termos controle total (modelo PTT)
           // Com VAD desabilitado, usamos activityStart/activityEnd para definir as fronteiras de fala
@@ -84,7 +164,7 @@ Ao iniciar a sessão, cumprimente o aluno de forma calorosa e pergunte o que ele
             speechConfig: {
               voiceConfig: {
                 prebuiltVoiceConfig: {
-                  voiceName: 'Puck'
+                  voiceName: 'Aoede'
                 }
               }
             }
@@ -99,7 +179,6 @@ Ao iniciar a sessão, cumprimente o aluno de forma calorosa e pergunte o que ele
         if (geminiWs && geminiWs.readyState === WebSocket.OPEN) {
           try {
             geminiWs.ping();
-            console.log('[RELAY] Keepalive ping enviado ao Gemini');
           } catch (e) {
             console.warn('[RELAY] Falha no keepalive ping:', e);
           }
@@ -124,7 +203,6 @@ Ao iniciar a sessão, cumprimente o aluno de forma calorosa e pergunte o que ele
     geminiWs.on('message', async (geminiData, geminiIsBinary) => {
       if (clientWs.readyState !== WebSocket.OPEN) return;
 
-      // gemini-2.5-flash-native-audio-latest envia JSON como frames BINÁRIOS
       const geminiMsgStr = Buffer.isBuffer(geminiData)
         ? (geminiData as Buffer).toString('utf8')
         : Array.isArray(geminiData)
@@ -134,29 +212,57 @@ Ao iniciar a sessão, cumprimente o aluno de forma calorosa e pergunte o que ele
       try {
         const geminiJson = JSON.parse(geminiMsgStr);
 
-          if (geminiJson.error) {
-            console.error('[RELAY] Gemini API retornou erro:', JSON.stringify(geminiJson.error));
-            clientWs.send(JSON.stringify({ type: 'error', code: 'GEMINI_API_ERROR', message: geminiJson.error.message || 'Erro na API da IA' }));
-            return;
-          }
+        if (geminiJson.error) {
+          console.error('[RELAY] Gemini API retornou erro:', JSON.stringify(geminiJson.error));
+          clientWs.send(JSON.stringify({ type: 'error', code: 'GEMINI_API_ERROR', message: geminiJson.error.message || 'Erro na API da IA' }));
+          return;
+        }
+
+        // Atualização de handle de retomada da sessão (Session Resumption)
+        if (geminiJson.sessionResumptionUpdate?.newHandle) {
+          resumptionHandle = geminiJson.sessionResumptionUpdate.newHandle;
+          console.log(`[RELAY] Novo resumption handle salvo: ${resumptionHandle}`);
+        }
+
+        // Sinal de goAway do Gemini (sessão chegando ao limite de tempo)
+        if (geminiJson.goAway) {
+          console.log('[RELAY] Gemini enviou goAway — agendando reconexão limpa com resumption handle');
+          scheduleReconnect();
+          return;
+        }
 
         // setupComplete: notifica o cliente que a sessão está pronta
         if (geminiJson.setupComplete && userId) {
-          const currentUsage = await UsageService.getUserUsage(userId, new Date().toISOString().slice(0, 7));
-          clientWs.send(JSON.stringify({
-            type: 'session_ready',
-            sessionId: Math.random().toString(36).substring(7),
-            usage: currentUsage
-          }));
+          reconnectAttempts = 0;
 
-          // Envia uma saudação inicial: confirma que o pipeline está vivo e apresenta a professora
-          console.log('[RELAY] setupComplete recebido — enviando saudação inicial');
-          geminiWs!.send(JSON.stringify({
-            clientContent: {
-              turns: [{ role: 'user', parts: [{ text: 'Olá, estou pronto para a aula!' }] }],
-              turnComplete: true
-            }
-          }));
+          if (isInitialConnection) {
+            isInitialConnection = false;
+            sessionStartMs = Date.now();
+            const currentUsage = await UsageService.getUserUsage(userId, new Date().toISOString().slice(0, 7));
+            clientWs.send(JSON.stringify({
+              type: 'session_ready',
+              sessionId: Math.random().toString(36).substring(7),
+              usage: currentUsage
+            }));
+
+            // Envia uma saudação inicial: confirma que o pipeline está vivo e apresenta a professora
+            console.log('[RELAY] setupComplete inicial recebido — enviando saudação');
+            geminiWs!.send(JSON.stringify({
+              clientContent: {
+                turns: [{ role: 'user', parts: [{ text: 'Olá, estou pronto para a aula!' }] }],
+                turnComplete: true
+              }
+            }));
+          } else {
+            console.log('[RELAY] Sessão Gemini reconectada com sucesso usando handle');
+            clientWs.send(JSON.stringify({ type: 'teacher_state', state: 'idle' }));
+          }
+        }
+
+        // Sinaliza quando o aluno interrompe a professora
+        if (geminiJson?.serverContent?.interrupted) {
+          console.log('[RELAY] Gemini interrompido pelo usuário');
+          clientWs.send(JSON.stringify({ type: 'teacher_state', state: 'interrupted' }));
         }
 
         // Sinaliza quando a professora terminou de falar
@@ -164,17 +270,32 @@ Ao iniciar a sessão, cumprimente o aluno de forma calorosa e pergunte o que ele
           clientWs.send(JSON.stringify({ type: 'teacher_state', state: 'idle' }));
         }
 
-        // Intercept board events (function calls)
+        // Trata tool calls (desenho no quadro verde) e responde imediatamente
+        if (geminiJson.toolCall?.functionCalls) {
+          const responses = [];
+          for (const fc of geminiJson.toolCall.functionCalls) {
+            if (fc.name === 'draw_board') {
+              console.log('[RELAY] draw_board function call:', JSON.stringify(fc.args));
+              const events = normalizeBoardCall(fc.args, sessionStartMs);
+              for (const ev of events) {
+                clientWs.send(JSON.stringify({ type: 'board_event', event: ev }));
+              }
+            }
+            responses.push({ id: fc.id, name: fc.name, response: { result: 'ok' } });
+          }
+          if (geminiWs && geminiWs.readyState === WebSocket.OPEN) {
+            geminiWs.send(JSON.stringify({ toolResponse: { functionResponses: responses } }));
+          }
+        }
+
+        if (geminiJson.toolCallCancellation) {
+          console.log('[RELAY] Tool call cancelada:', geminiJson.toolCallCancellation);
+        }
+
+        // Processa partes do modelo (áudio nativo)
         if (geminiJson?.serverContent?.modelTurn?.parts) {
           const parts = geminiJson.serverContent.modelTurn.parts;
           for (const part of parts) {
-            if (part.functionCall && part.functionCall.name === 'draw_board') {
-              clientWs.send(JSON.stringify({
-                type: 'board_event',
-                event: part.functionCall.args
-              }));
-            }
-            // Native audio: inline PCM data inside parts
             if (part.inlineData && part.inlineData.mimeType?.startsWith('audio/')) {
               clientWs.send(JSON.stringify({
                 type: 'audio_chunk',
@@ -185,10 +306,7 @@ Ao iniciar a sessão, cumprimente o aluno de forma calorosa e pergunte o que ele
             }
           }
         }
-
-        // Não reenvia o JSON bruto do Gemini para o cliente (evita processamento duplo de áudio)
       } catch (e) {
-        // Se parsing falhar é um frame binário genuíno — descarta (não deve acontecer com Gemini 2.5)
         console.warn('[RELAY] Mensagem não-JSON do Gemini descartada');
       }
     });
@@ -197,9 +315,9 @@ Ao iniciar a sessão, cumprimente o aluno de forma calorosa e pergunte o que ele
       console.log(`[RELAY] Gemini connection closed: code=${code} reason=${reason?.toString()}`);
       if (keepaliveInterval) { clearInterval(keepaliveInterval); keepaliveInterval = null; }
       geminiWs = null;
-      // Notifica o frontend que o Gemini desconectou (mas não fecha o frontend WS)
+
       if (clientWs.readyState === WebSocket.OPEN) {
-        clientWs.send(JSON.stringify({ type: 'error', code: 'GEMINI_DISCONNECTED', message: 'Conexão com a IA perdida. Reconectando...' }));
+        scheduleReconnect();
       }
     });
 
@@ -207,8 +325,9 @@ Ao iniciar a sessão, cumprimente o aluno de forma calorosa e pergunte o que ele
       console.error('[RELAY] Gemini WS error:', err);
       if (keepaliveInterval) { clearInterval(keepaliveInterval); keepaliveInterval = null; }
       geminiWs = null;
+
       if (clientWs.readyState === WebSocket.OPEN) {
-        clientWs.send(JSON.stringify({ type: 'error', code: 'GEMINI_ERROR', message: 'Erro na conexão com a IA' }));
+        scheduleReconnect();
       }
     });
   };
@@ -247,12 +366,17 @@ Ao iniciar a sessão, cumprimente o aluno de forma calorosa e pergunte o que ele
         }
 
         isAuthenticated = true;
+        isInitialConnection = true;
+        reconnectAttempts = 0;
         connectToGemini(studyContext);
 
       } else if (geminiWs && geminiWs.readyState === WebSocket.OPEN) {
         if (msg.type === 'ptt_start') {
-          // Usuário pressionou o botão: no raw websocket, apenas começamos a enviar audio_chunks
-          console.log('[RELAY] PTT Start recebido');
+          console.log('[RELAY] PTT Start -> activityStart');
+          hasInputInCurrentTurn = true;
+          geminiWs.send(JSON.stringify({
+            realtimeInput: { activityStart: {} }
+          }));
         } else if (msg.type === 'audio_chunk') {
           const mimeType = msg.mimeType || 'audio/pcm;rate=16000';
           const base64Data = msg.data as string;
@@ -263,23 +387,17 @@ Ao iniciar a sessão, cumprimente o aluno de forma calorosa e pergunte o que ele
             hasInputInCurrentTurn = true;
             geminiWs.send(JSON.stringify({
               realtimeInput: {
-                mediaChunks: [{ mimeType, data: base64Data }]
+                audio: { data: base64Data, mimeType }
               }
             }));
           }
 
         } else if (msg.type === 'turn_complete') {
-          // Usuário soltou o botão: sinaliza fim de fala -> Gemini responde
-          console.log('[RELAY] PTT End -> turnComplete');
-          if (hasInputInCurrentTurn) {
-            geminiWs.send(JSON.stringify({
-              clientContent: { turnComplete: true }
-            }));
-            hasInputInCurrentTurn = false;
-          } else {
-            console.warn('[RELAY] turn_complete recebido mas sem nenhum chunk de input. Forçando state idle.');
-            clientWs.send(JSON.stringify({ type: 'teacher_state', state: 'idle' }));
-          }
+          console.log('[RELAY] PTT End -> activityEnd');
+          hasInputInCurrentTurn = false;
+          geminiWs.send(JSON.stringify({
+            realtimeInput: { activityEnd: {} }
+          }));
 
         } else if (msg.type === 'text_message') {
           hasInputInCurrentTurn = false;
@@ -289,11 +407,29 @@ Ao iniciar a sessão, cumprimente o aluno de forma calorosa e pergunte o que ele
               turnComplete: true
             }
           }));
+
+        } else if (msg.type === 'image_message') {
+          console.log('[RELAY] Imagem recebida do aluno');
+          hasInputInCurrentTurn = false;
+          const mimeType = msg.mimeType || 'image/jpeg';
+          const promptText = msg.text || 'Analise a imagem da anotação/exercício enviada e ajude a explicar e resolver no quadro verde.';
+
+          geminiWs.send(JSON.stringify({
+            realtimeInput: {
+              mediaChunks: [{ mimeType, data: msg.data }]
+            }
+          }));
+
+          geminiWs.send(JSON.stringify({
+            clientContent: {
+              turns: [{ role: 'user', parts: [{ text: promptText }] }],
+              turnComplete: true
+            }
+          }));
         }
       } else if (geminiWs && geminiWs.readyState !== WebSocket.OPEN) {
-        // Gemini caiu — informa o frontend
-        console.warn('[RELAY] Mensagem recebida mas Gemini WS não está aberto, reconectando...');
-        connectToGemini(studyContext);
+        console.warn('[RELAY] Mensagem recebida mas Gemini WS não está aberto, agendando reconexão...');
+        scheduleReconnect();
       }
     } catch (error) {
       console.error('[RELAY] Error parsing client message:', error);

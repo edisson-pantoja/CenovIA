@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import type { UserUsage } from '@cenovia/shared';
 import config from '../config';
 
 const supabase = createClient(
@@ -6,12 +7,7 @@ const supabase = createClient(
   config.supabaseServiceKey || ''
 );
 
-export interface UserUsage {
-  userId: string;
-  month: string;
-  minutesUsed: number;
-  minutesRemaining: number;
-}
+export type { UserUsage };
 
 export class UsageService {
   static async getUserUsage(userId: string, month: string): Promise<UserUsage> {
@@ -30,6 +26,7 @@ export class UsageService {
         userId,
         month,
         minutesUsed,
+        minutesLimit: config.freeTierMinutesPerMonth,
         minutesRemaining
       };
     } catch (error) {
@@ -38,6 +35,7 @@ export class UsageService {
         userId,
         month,
         minutesUsed: 0,
+        minutesLimit: config.freeTierMinutesPerMonth,
         minutesRemaining: config.freeTierMinutesPerMonth
       };
     }
@@ -56,12 +54,14 @@ export class UsageService {
       });
 
       if (error) {
-        // Fallback: upsert manual caso a RPC não esteja disponível
+        // Fallback: soma manual caso a RPC não esteja disponível
         console.warn('[USAGE] RPC not available, using fallback upsert:', error.message);
+        const currentUsage = await this.getUserUsage(userId, month);
+        const newTotal = (currentUsage.minutesUsed || 0) + minutes;
         await supabase
           .from('usage_tracking')
           .upsert(
-            { user_id: userId, month, minutes_used: minutes },
+            { user_id: userId, month, minutes_used: newTotal },
             { onConflict: 'user_id,month', ignoreDuplicates: false }
           );
       }

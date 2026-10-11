@@ -1,4 +1,4 @@
-import { BoardEvent } from './gemini-live-client';
+import type { BoardEvent } from '@cenovia/shared';
 
 export class BoardEventProcessor {
   private events: BoardEvent[] = [];

@@ -1,11 +1,11 @@
 /**
  * ClassroomScreen — Tela principal de aula do CenovIA
  *
- * Layout 50/50 vertical:
- *  - Metade superior: Avatar Lottie da professora + indicador de estado + player de replay
- *  - Metade inferior: Quadro verde Skia + botão PTT (push-to-talk)
- *
- * Integra GeminiLiveClient (WebSocket) e AudioManager (expo-av).
+ * Reproduz fielmente a interface da Profa. Ana:
+ *  - Header: Profa. Ana / Reforço Escolar, indicador "Ao vivo" + cronômetro, Configurações e botão vermelho Encerrar
+ *  - Metade superior: Câmera da Profa. Ana com badge "Online", efeitos de fala e PIP do aluno
+ *  - Metade inferior: Quadro verde ardósia com ferramentas e fórmulas KaTeX
+ *  - Barra inferior: Ações "Enviar imagem", "Anexos", campo de texto, botão PTT e botão azul "Enviar"
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -16,7 +16,8 @@ import {
   TouchableOpacity,
   Text,
   Alert,
-  Pressable,
+  TextInput,
+  Image,
   Platform,
 } from 'react-native';
 import { useRouter } from 'expo-router';
@@ -27,15 +28,18 @@ import { audioManager } from '../../lib/audio-manager';
 import { COLORS } from '../../lib/constants';
 import type { BoardEvent, TeacherState, UserUsage } from '@cenovia/shared';
 
-import TeacherAvatar from '../../components/TeacherAvatar/TeacherAvatar';
-import SpeakingIndicator from '../../components/TeacherAvatar/SpeakingIndicator';
-// ChalkBoardWrapper escolhe automaticamente a versão correta por plataforma:
-// - ChalkBoardWrapper.web.tsx → Canvas HTML5 (web/Vercel)
-// - ChalkBoardWrapper.tsx → Skia nativo (iOS/Android)
 import ChalkBoardWrapper from '../../components/ChalkBoard/ChalkBoardWrapper';
 import AudioReplayPlayer from '../../components/AudioReplayPlayer';
 import UsageBanner from '../../components/UsageBanner';
 import { webAudioRecorder, WebAudioRecorder } from '../../lib/audio-recorder';
+
+function formatTimer(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+}
 
 export default function ClassroomScreen() {
   const router = useRouter();
@@ -50,10 +54,23 @@ export default function ClassroomScreen() {
   const [replayTimeMs, setReplayTimeMs] = useState<number | undefined>(undefined);
   const [sessionDurationMs, setSessionDurationMs] = useState(0);
   const [usageLimitReached, setUsageLimitReached] = useState(false);
+  const [inputText, setInputText] = useState('');
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const [toast, setToast] = useState<{ message: string; type: 'info' | 'warning' | 'error' } | null>(null);
 
   // Temporizador da sessão
   const sessionStartRef = useRef<number>(Date.now());
   const durationTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const showToast = useCallback((message: string, type: 'info' | 'warning' | 'error' = 'info') => {
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    setToast({ message, type });
+    toastTimeoutRef.current = setTimeout(() => {
+      setToast(null);
+    }, 4500);
+  }, []);
 
   // ── Conectar ao backend relay ─────────────────────────────────────────────
 
@@ -70,13 +87,13 @@ export default function ClassroomScreen() {
       geminiClient.disconnect();
       audioManager.cleanup();
       if (durationTimerRef.current) clearInterval(durationTimerRef.current);
+      if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const connectToSession = async () => {
     if (!session?.access_token || !studyContext) return;
 
-    // Configura callbacks do cliente antes de conectar
     geminiClient.onConnected = () => {
       console.log('[CLASSROOM] Conectado ao relay');
     };
@@ -85,7 +102,6 @@ export default function ClassroomScreen() {
       setIsConnected(true);
       setUsage(updatedUsage);
       setTeacherState('idle');
-      // Inicia temporizador de duração da sessão
       sessionStartRef.current = Date.now();
       durationTimerRef.current = setInterval(() => {
         setSessionDurationMs(Date.now() - sessionStartRef.current);
@@ -102,6 +118,14 @@ export default function ClassroomScreen() {
 
     geminiClient.onTeacherStateChange = (state) => {
       setTeacherState(state);
+      if (state === 'reconnecting') {
+        showToast('Reconectando à professora...', 'warning');
+      }
+    };
+
+    geminiClient.onInterrupted = () => {
+      console.log('[CLASSROOM] Professora interrompida pelo aluno');
+      audioManager.clearPlayback();
     };
 
     geminiClient.onUsageUpdate = (updatedUsage: UserUsage) => {
@@ -111,20 +135,18 @@ export default function ClassroomScreen() {
     geminiClient.onUsageLimitReached = () => {
       setUsageLimitReached(true);
       setIsConnected(false);
-      Alert.alert(
-        'Limite de minutos atingido',
-        'Você usou todos os seus 30 minutos gratuitos este mês. Aguarde o próximo mês para continuar.',
-        [{ text: 'OK', onPress: () => router.back() }],
-      );
+      showToast('Limite de minutos atingido (30 min gratuitos este mês).', 'error');
     };
 
     geminiClient.onError = (code, message) => {
       console.error('[CLASSROOM] Erro:', code, message);
       if (code === 'AUTH_FAILED') {
-        Alert.alert('Erro de autenticação', 'Faça login novamente.');
-        router.replace('/(auth)/sign-in');
-      } else {
-        Alert.alert('Erro de conexão', message);
+        showToast('Erro de autenticação. Redirecionando para login...', 'error');
+        setTimeout(() => router.replace('/(auth)/sign-in'), 1500);
+      } else if (code === 'GEMINI_DISCONNECTED') {
+        showToast('Conexão com a IA perdida após várias tentativas.', 'error');
+      } else if (code !== 'TIMEOUT') {
+        showToast(message || 'Aviso na conexão com a IA', 'warning');
       }
     };
 
@@ -136,12 +158,15 @@ export default function ClassroomScreen() {
     try {
       await geminiClient.connect(session.access_token, studyContext);
     } catch (err) {
-      Alert.alert(
-        'Erro ao conectar',
-        'Não foi possível conectar ao servidor. Verifique sua conexão e tente novamente.',
-      );
-      router.back();
+      showToast('Não foi possível conectar ao servidor. Tentando reconectar...', 'error');
     }
+  };
+
+  const handleEndSession = () => {
+    geminiClient.disconnect();
+    audioManager.cleanup();
+    if (durationTimerRef.current) clearInterval(durationTimerRef.current);
+    router.back();
   };
 
   // ── Push-To-Talk (gravação de voz) ─────────────────────────────────────────
@@ -157,7 +182,7 @@ export default function ClassroomScreen() {
         const ok = await webAudioRecorder.start();
         if (!ok) {
           webAudioRecorder.onChunk = undefined;
-          Alert.alert('Permissão necessária', 'Permita o acesso ao microfone no navegador.');
+          showToast('Permita o acesso ao microfone no navegador para falar com a professora.', 'warning');
           return;
         }
       } else {
@@ -168,9 +193,9 @@ export default function ClassroomScreen() {
       setTeacherState('listening');
       setReplayTimeMs(undefined);
     } catch (err) {
-      Alert.alert('Permissão necessária', 'Habilite o microfone nas configurações do dispositivo.');
+      showToast('Habilite o microfone nas permissões para usar a voz.', 'warning');
     }
-  }, [isConnected, usageLimitReached]);
+  }, [isConnected, usageLimitReached, showToast]);
 
   const handlePTTEnd = useCallback(async () => {
     if (!isRecording) return;
@@ -207,6 +232,53 @@ export default function ClassroomScreen() {
     }
   }, [isRecording]);
 
+  // ── Envio de mensagem de texto ────────────────────────────────────────────
+
+  const handleSendTextMessage = () => {
+    const trimmed = inputText.trim();
+    if (!trimmed || !isConnected) return;
+    setInputText('');
+    setTeacherState('thinking');
+    geminiClient.sendTextMessage(trimmed);
+  };
+
+  // ── Envio de imagem (caderno / exercício) ──────────────────────────────────
+
+  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploadingImage(true);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const base64Data = result.split(',')[1];
+      const mimeType = file.type || 'image/jpeg';
+      if (base64Data) {
+        setTeacherState('thinking');
+        showToast('Enviando foto do caderno para a professora...', 'info');
+        geminiClient.sendImageMessage(
+          base64Data,
+          mimeType,
+          'Professora, por favor analise a anotação/exercício da foto do meu caderno e me explique no quadro verde passo a passo.',
+        );
+      }
+      setIsUploadingImage(false);
+    };
+    reader.onerror = () => {
+      setIsUploadingImage(false);
+      showToast('Não foi possível ler a imagem selecionada.', 'error');
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  const handleTriggerImageUpload = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+
   // ── Replay ────────────────────────────────────────────────────────────────
 
   const handleSeek = useCallback((timeMs: number) => {
@@ -214,183 +286,777 @@ export default function ClassroomScreen() {
   }, []);
 
   const handleReplayEnd = useCallback(() => {
-    setReplayTimeMs(undefined); // Volta ao estado atual
+    setReplayTimeMs(undefined);
   }, []);
 
-  // ── Render ────────────────────────────────────────────────────────────────
-
-  const subjectLabel = studyContext?.subjectName ?? 'CenovIA';
-
   return (
-    <SafeAreaView style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.headerBtn} accessibilityLabel="Voltar">
-          <Text style={styles.headerBtnText}>←</Text>
-        </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>{subjectLabel}</Text>
-        <TouchableOpacity style={styles.headerBtn} accessibilityLabel="Configurações">
-          <Text style={styles.headerBtnText}>⚙</Text>
-        </TouchableOpacity>
-      </View>
+    <SafeAreaView style={styles.safeContainer}>
+      <div className="cenovia-app-layout">
+        <style>{`
+          .cenovia-app-layout {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            height: 100vh;
+            background-color: #0b131a;
+            color: #ffffff;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            overflow: hidden;
+          }
 
-      {/* Banner de uso do free tier */}
-      {usage && <UsageBanner minutesRemaining={usage.minutesRemaining} minutesLimit={usage.minutesLimit} />}
+          /* ── Barra Superior (Header) ── */
+          .cenovia-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 56px;
+            padding: 0 20px;
+            background-color: #0f1722;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            z-index: 20;
+          }
 
-      {/* Split 50/50 */}
-      <View style={styles.split}>
+          .header-left {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+          }
 
-        {/* ── Metade superior: Professora ─────────────────────────── */}
-        <View style={styles.teacherSection}>
-          <TeacherAvatar state={teacherState} />
-          <SpeakingIndicator state={teacherState} />
+          .header-brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+          }
 
-          {/* Player de replay — aparece quando há áudio gravado */}
-          {audioManager.getTotalBufferedDuration() > 0 && (
-            <AudioReplayPlayer
-              totalDurationMs={audioManager.getTotalBufferedDuration()}
-              currentTimeMs={replayTimeMs ?? audioManager.getTotalBufferedDuration()}
-              isLive={replayTimeMs === undefined}
-              onSeek={handleSeek}
-              onGoLive={handleReplayEnd}
+          .header-brand-icon {
+            width: 28px;
+            height: 28px;
+            fill: none;
+            stroke: #60a5fa;
+            stroke-width: 2;
+          }
+
+          .header-brand-titles {
+            display: flex;
+            flex-direction: column;
+          }
+
+          .header-brand-name {
+            font-size: 15px;
+            font-weight: 700;
+            color: #ffffff;
+            line-height: 1.2;
+          }
+
+          .header-brand-subtitle {
+            font-size: 11px;
+            font-weight: 400;
+            color: #94a3b8;
+          }
+
+          .header-live-badge {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #ffffff;
+            margin-left: 6px;
+          }
+
+          .live-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: #10b981;
+            box-shadow: 0 0 8px #10b981;
+            animation: pulseDot 2s infinite ease-in-out;
+          }
+
+          @keyframes pulseDot {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(0.85); }
+          }
+
+          .header-separator {
+            color: rgba(255, 255, 255, 0.2);
+            font-size: 14px;
+          }
+
+          .header-timer {
+            font-size: 13px;
+            font-weight: 500;
+            color: #e2e8f0;
+            font-variant-numeric: tabular-nums;
+          }
+
+          .header-right {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+          }
+
+          .header-settings-btn {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: transparent;
+            border: none;
+            color: #cbd5e1;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            padding: 8px 12px;
+            border-radius: 8px;
+            transition: background 0.2s;
+          }
+
+          .header-settings-btn:hover {
+            background: rgba(255, 255, 255, 0.06);
+          }
+
+          .header-end-btn {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: #ef4444;
+            border: none;
+            color: #ffffff;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            padding: 8px 16px;
+            border-radius: 20px;
+            transition: all 0.2s ease;
+            box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3);
+          }
+
+          .header-end-btn:hover {
+            background: #dc2626;
+            box-shadow: 0 4px 14px rgba(239, 68, 68, 0.45);
+          }
+
+          /* ── Corpo Principal (Split 50/50) ── */
+          .cenovia-body-split {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+          }
+
+          /* ── Metade Superior: Vídeo da Professora ── */
+          .teacher-video-container {
+            flex: 1;
+            position: relative;
+            background-color: #0b131a;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+          }
+
+          .teacher-video-image {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            object-position: center 25%;
+            transition: transform 0.3s ease;
+          }
+
+          /* Indicador de fala da professora */
+          .teacher-speaking-pulse {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            border: 3px solid transparent;
+            transition: all 0.3s ease;
+          }
+
+          .teacher-speaking-pulse.speaking {
+            border-color: rgba(16, 185, 129, 0.65);
+            box-shadow: inset 0 0 35px rgba(16, 185, 129, 0.35);
+          }
+
+          .teacher-speaking-pulse.thinking {
+            border-color: rgba(245, 158, 11, 0.65);
+            box-shadow: inset 0 0 35px rgba(245, 158, 11, 0.25);
+          }
+
+          .teacher-speaking-pulse.reconnecting {
+            border-color: rgba(245, 158, 11, 0.75);
+            box-shadow: inset 0 0 45px rgba(245, 158, 11, 0.35);
+            animation: pulseSpeaking 1.5s infinite ease-in-out;
+          }
+
+          /* ── Toast Discreto Flutuante ── */
+          .cenovia-toast-container {
+            position: absolute;
+            top: 66px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 18px;
+            border-radius: 9999px;
+            font-size: 13px;
+            font-weight: 500;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+            animation: slideDownToast 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+            backdrop-filter: blur(12px);
+            max-width: 90%;
+            pointer-events: none;
+          }
+
+          .toast-info {
+            background: rgba(30, 41, 59, 0.92);
+            border: 1px solid rgba(96, 165, 250, 0.4);
+            color: #93c5fd;
+          }
+
+          .toast-warning {
+            background: rgba(41, 37, 36, 0.94);
+            border: 1px solid rgba(245, 158, 11, 0.5);
+            color: #fde68a;
+          }
+
+          .toast-error {
+            background: rgba(45, 20, 20, 0.94);
+            border: 1px solid rgba(239, 68, 68, 0.5);
+            color: #fca5a5;
+          }
+
+          @keyframes slideDownToast {
+            from {
+              opacity: 0;
+              transform: translate(-50%, -10px);
+            }
+            to {
+              opacity: 1;
+              transform: translate(-50%, 0);
+            }
+          }
+
+          /* Badge: Câmera da professora • Online */
+          .teacher-cam-badge {
+            position: absolute;
+            top: 14px;
+            left: 18px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(15, 23, 42, 0.75);
+            backdrop-filter: blur(8px);
+            padding: 6px 14px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            font-size: 12px;
+            font-weight: 500;
+            color: #ffffff;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+          }
+
+          .cam-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background-color: #10b981;
+          }
+
+          /* Card: Aluno PIP (Canto Superior Direito) */
+          .student-pip-card {
+            position: absolute;
+            top: 14px;
+            right: 18px;
+            width: 154px;
+            background: rgba(15, 23, 42, 0.85);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+          }
+
+          .student-pip-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px;
+          }
+
+          .student-avatar-icon {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: #2563eb;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            color: white;
+            font-weight: 600;
+          }
+
+          .student-pip-info {
+            display: flex;
+            flex-direction: column;
+          }
+
+          .student-pip-name {
+            font-size: 12px;
+            font-weight: 600;
+            color: #ffffff;
+          }
+
+          .student-pip-status {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 10px;
+            color: #10b981;
+            font-weight: 500;
+          }
+
+          .student-pip-preview {
+            width: 100%;
+            height: 88px;
+            position: relative;
+            background: #1e293b;
+          }
+
+          .student-pip-preview-img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+          }
+
+          .student-cam-tag {
+            position: absolute;
+            bottom: 6px;
+            left: 6px;
+            background: rgba(0, 0, 0, 0.65);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            color: #e2e8f0;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+          }
+
+          /* ── Metade Inferior: Quadro Verde ── */
+          .chalkboard-section-container {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+            display: flex;
+          }
+
+          /* ── Barra Inferior de Chat & Ações (Mockup) ── */
+          .cenovia-chat-bar {
+            height: 64px;
+            background-color: #0d1520;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+            display: flex;
+            align-items: center;
+            padding: 0 16px;
+            gap: 12px;
+            z-index: 20;
+          }
+
+          .chat-action-btn {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #cbd5e1;
+            font-size: 13px;
+            font-weight: 500;
+            padding: 8px 14px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            white-space: nowrap;
+          }
+
+          .chat-action-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: #ffffff;
+            border-color: rgba(255, 255, 255, 0.2);
+          }
+
+          .chat-input-wrapper {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            background: #152230;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 24px;
+            padding: 0 14px;
+            height: 42px;
+            transition: border-color 0.2s;
+          }
+
+          .chat-input-wrapper:focus-within {
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+          }
+
+          .chat-input-field {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: #ffffff;
+            font-size: 14px;
+            outline: none;
+            font-family: inherit;
+          }
+
+          .chat-input-field::placeholder {
+            color: #64748b;
+          }
+
+          .chat-emoji-btn {
+            background: transparent;
+            border: none;
+            font-size: 18px;
+            cursor: pointer;
+            padding: 4px;
+            opacity: 0.75;
+            transition: opacity 0.2s;
+          }
+
+          .chat-emoji-btn:hover {
+            opacity: 1;
+          }
+
+          /* Botão PTT (Microfone) integrado */
+          .chat-ptt-btn {
+            width: 42px;
+            height: 42px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1.5px solid rgba(255, 255, 255, 0.2);
+            color: #ffffff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 18px;
+            transition: all 0.2s;
+            user-select: none;
+          }
+
+          .chat-ptt-btn:hover {
+            background: rgba(255, 255, 255, 0.15);
+          }
+
+          .chat-ptt-btn.recording {
+            background: #ef4444;
+            border-color: #f87171;
+            animation: pulseRec 1.2s infinite ease-in-out;
+            box-shadow: 0 0 12px rgba(239, 68, 68, 0.6);
+          }
+
+          @keyframes pulseRec {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.08); }
+          }
+
+          /* Botão Azul "Enviar" */
+          .chat-send-btn {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #2563eb;
+            border: none;
+            color: #ffffff;
+            font-size: 14px;
+            font-weight: 600;
+            padding: 10px 20px;
+            border-radius: 24px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.35);
+          }
+
+          .chat-send-btn:hover {
+            background: #1d4ed8;
+            box-shadow: 0 6px 16px rgba(37, 99, 235, 0.45);
+          }
+
+          .chat-send-btn:disabled {
+            background: #1e3a5f;
+            color: #64748b;
+            cursor: not-allowed;
+            box-shadow: none;
+          }
+        `}</style>
+
+        {/* ── Input oculto para upload de imagem da câmera/exercício ── */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          style={{ display: 'none' }}
+          onChange={handleImageSelect}
+        />
+
+        {/* ── 1. Header (Identidade Visual da Imagem) ── */}
+        <header className="cenovia-header">
+          <div className="header-left">
+            <div className="header-brand">
+              <svg className="header-brand-icon" viewBox="0 0 24 24">
+                <path d="M22 10v6M2 10l10-5 10 5-10 5z" />
+                <path d="M6 12v5c3 3 9 3 12 0v-5" />
+              </svg>
+              <div className="header-brand-titles">
+                <span className="header-brand-name">Profa. Ana</span>
+                <span className="header-brand-subtitle">
+                  {studyContext?.subjectName ? `Reforço • ${studyContext.subjectName}` : 'Reforço Escolar'}
+                </span>
+              </div>
+            </div>
+
+            <div className="header-live-badge">
+              <span className="live-dot" />
+              <span>Ao vivo</span>
+            </div>
+
+            <span className="header-separator">|</span>
+
+            <span className="header-timer">
+              {formatTimer(sessionDurationMs)}
+            </span>
+          </div>
+
+          <div className="header-right">
+            <button className="header-settings-btn" title="Configurações">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              </svg>
+              <span>Configurações</span>
+            </button>
+
+            <button className="header-end-btn" onClick={handleEndSession} title="Encerrar Aula">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5 11h-4v4h-2v-4H7v-2h4V7h2v4h4v2z" transform="rotate(45 12 12)" />
+              </svg>
+              <span>Encerrar</span>
+            </button>
+          </div>
+        </header>
+
+        {/* ── Toast Notificação Discreta Flutuante ── */}
+        {toast && (
+          <div className={`cenovia-toast-container toast-${toast.type}`}>
+            {toast.type === 'warning' && (
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+                <line x1="12" y1="9" x2="12" y2="13" />
+                <line x1="12" y1="17" x2="12.01" y2="17" />
+              </svg>
+            )}
+            {toast.type === 'error' && (
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="15" y1="9" x2="9" y2="15" />
+                <line x1="9" y1="9" x2="15" y2="15" />
+              </svg>
+            )}
+            {toast.type === 'info' && (
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="16" x2="12" y2="12" />
+                <line x1="12" y1="8" x2="12.01" y2="8" />
+              </svg>
+            )}
+            <span>{toast.message}</span>
+          </div>
+        )}
+
+        {/* ── Banner de Minutos do Free Tier (se necessário) ── */}
+        {usage && usage.minutesRemaining < 30 && (
+          <UsageBanner minutesRemaining={usage.minutesRemaining} minutesLimit={usage.minutesLimit} />
+        )}
+
+        {/* ── 2. Corpo Split (50% Vídeo Professora / 50% Quadro Verde) ── */}
+        <div className="cenovia-body-split">
+
+          {/* ── Metade Superior: Vídeo da Professora + PIP do Aluno ── */}
+          <section className="teacher-video-container" aria-label="Transmissão da professora">
+            <Image
+              source={require('../../assets/images/teacher.jpg')}
+              style={styles.teacherVideoImage}
+              resizeMode="cover"
             />
-          )}
 
-          {/* Indicador de estado da conexão */}
-          {!isConnected && (
-            <View style={styles.connectingOverlay}>
-              <Text style={styles.connectingText}>
-                {usageLimitReached ? '⛔ Limite atingido' : '⏳ Conectando...'}
-              </Text>
-            </View>
-          )}
-        </View>
+            {/* Aura sutil quando a professora está falando ou pensando */}
+            <div className={`teacher-speaking-pulse ${teacherState}`} />
 
-        {/* ── Metade inferior: Quadro verde ───────────────────────── */}
-        <View style={styles.boardSection}>
-          <ChalkBoardWrapper
-            events={boardEvents}
-            replayTimeMs={replayTimeMs}
-          />
+            {/* Badge: Câmera da professora • Online / Reconectando */}
+            <div className="teacher-cam-badge">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polygon points="23 7 16 12 23 17 23 7" />
+                <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+              </svg>
+              <span>Câmera da professora</span>
+              <span
+                className="cam-dot"
+                style={{
+                  backgroundColor: teacherState === 'reconnecting' ? '#f59e0b' : '#10b981',
+                }}
+              />
+              <span
+                style={{
+                  color: teacherState === 'reconnecting' ? '#f59e0b' : '#10b981',
+                  fontWeight: 600,
+                }}
+              >
+                {teacherState === 'reconnecting' ? 'Reconectando...' : 'Online'}
+              </span>
+            </div>
 
-          {/* Botão Push-To-Talk */}
-          {!usageLimitReached && (
-            <Pressable
-              style={({ pressed }) => [
-                styles.pttButton,
-                isRecording && styles.pttButtonActive,
-                pressed && styles.pttButtonPressed,
-              ]}
-              onPressIn={handlePTTStart}
-              onPressOut={handlePTTEnd}
-              accessibilityLabel="Segure para falar com a professora"
-              accessibilityRole="button"
-            >
-              <Text style={styles.pttText}>
-                {isRecording ? '🔴 Ouvindo...' : '🎤 Segure para falar'}
-              </Text>
-            </Pressable>
-          )}
-        </View>
-      </View>
+            {/* Card: Aluno PIP (Canto Superior Direito) */}
+            <div className="student-pip-card">
+              <div className="student-pip-header">
+                <div className="student-avatar-icon">A</div>
+                <div className="student-pip-info">
+                  <span className="student-pip-name">Aluno</span>
+                  <div className="student-pip-status">
+                    <span className="cam-dot" />
+                    <span>Conectado</span>
+                  </div>
+                </div>
+              </div>
+              <div className="student-pip-preview">
+                <Image
+                  source={require('../../assets/images/student_pip.jpg')}
+                  style={styles.studentPipPreviewImg}
+                  resizeMode="cover"
+                />
+                <div className="student-cam-tag">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <polygon points="23 7 16 12 23 17 23 7" />
+                    <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+                  </svg>
+                  <span>Sua câmera</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Player de Replay (se houver buffer) */}
+            {audioManager.getTotalBufferedDuration() > 0 && (
+              <AudioReplayPlayer
+                totalDurationMs={audioManager.getTotalBufferedDuration()}
+                currentTimeMs={replayTimeMs ?? audioManager.getTotalBufferedDuration()}
+                isLive={replayTimeMs === undefined}
+                onSeek={handleSeek}
+                onGoLive={handleReplayEnd}
+              />
+            )}
+          </section>
+
+          {/* ── Metade Inferior: Quadro Verde com Ferramentas ── */}
+          <section className="chalkboard-section-container" aria-label="Quadro verde">
+            <ChalkBoardWrapper
+              events={boardEvents}
+              replayTimeMs={replayTimeMs}
+            />
+          </section>
+        </div>
+
+        {/* ── 3. Barra Inferior de Chat & Ações (Exatamente como o Mockup) ── */}
+        <footer className="cenovia-chat-bar">
+          <button
+            className="chat-action-btn"
+            onClick={handleTriggerImageUpload}
+            title="Enviar foto do exercício ou caderno"
+            disabled={isUploadingImage}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+              <circle cx="8.5" cy="8.5" r="1.5" />
+              <polyline points="21 15 16 10 5 21" />
+            </svg>
+            <span>{isUploadingImage ? 'Enviando...' : 'Enviar imagem'}</span>
+          </button>
+
+          <button
+            className="chat-action-btn"
+            onClick={handleTriggerImageUpload}
+            title="Anexar arquivo"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+            </svg>
+            <span>Anexos</span>
+          </button>
+
+          {/* Campo de Digitação */}
+          <div className="chat-input-wrapper">
+            <input
+              type="text"
+              className="chat-input-field"
+              placeholder="Digite sua mensagem..."
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleSendTextMessage();
+              }}
+            />
+            <button className="chat-emoji-btn" title="Inserir emoji">
+              🙂
+            </button>
+          </div>
+
+          {/* Botão Push-to-Talk (Microfone) */}
+          <button
+            className={`chat-ptt-btn ${isRecording ? 'recording' : ''}`}
+            onMouseDown={handlePTTStart}
+            onMouseUp={handlePTTEnd}
+            onTouchStart={handlePTTStart}
+            onTouchEnd={handlePTTEnd}
+            title="Segure para falar com a Profa. Ana"
+          >
+            {isRecording ? '🔴' : '🎤'}
+          </button>
+
+          {/* Botão Azul "Enviar" */}
+          <button
+            className="chat-send-btn"
+            onClick={handleSendTextMessage}
+            disabled={!inputText.trim()}
+            title="Enviar mensagem para a professora"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+            </svg>
+            <span>Enviar</span>
+          </button>
+        </footer>
+      </div>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  safeContainer: {
     flex: 1,
-    backgroundColor: COLORS.BACKGROUND,
+    backgroundColor: '#0b131a',
   },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    alignItems: 'center',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: 'rgba(255,255,255,0.1)',
-  },
-  headerBtn: {
-    width: 44,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  headerBtnText: {
-    color: COLORS.TEXT_PRIMARY,
-    fontSize: 20,
-  },
-  headerTitle: {
-    color: COLORS.TEXT_PRIMARY,
-    fontSize: 17,
-    fontWeight: '600',
-    flex: 1,
-    textAlign: 'center',
-  },
-  split: {
-    flex: 1,
-    flexDirection: 'column',
-  },
-  teacherSection: {
-    flex: 1,
-    backgroundColor: COLORS.BACKGROUND,
-    position: 'relative',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  boardSection: {
-    flex: 1,
-    backgroundColor: COLORS.CHALKBOARD_GREEN,
-    position: 'relative',
-  },
-  connectingOverlay: {
+  teacherVideoImage: {
+    width: '100%',
+    height: '100%',
     position: 'absolute',
-    bottom: 16,
-    alignSelf: 'center',
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
+    top: 0,
+    left: 0,
   },
-  connectingText: {
-    color: COLORS.TEXT_PRIMARY,
-    fontSize: 14,
-  },
-  pttButton: {
-    position: 'absolute',
-    bottom: 24,
-    alignSelf: 'center',
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    paddingVertical: 13,
-    paddingHorizontal: 28,
-    borderRadius: 28,
-    borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.25)',
-    minWidth: 200,
-    alignItems: 'center',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.3,
-        shadowRadius: 4,
-      },
-      android: { elevation: 4 },
-    }),
-  },
-  pttButtonActive: {
-    backgroundColor: 'rgba(220,50,50,0.7)',
-    borderColor: 'rgba(255,100,100,0.6)',
-  },
-  pttButtonPressed: {
-    opacity: 0.8,
-    transform: [{ scale: 0.97 }],
-  },
-  pttText: {
-    color: COLORS.TEXT_PRIMARY,
-    fontSize: 15,
-    fontWeight: '600',
-    letterSpacing: 0.3,
+  studentPipPreviewImg: {
+    width: '100%',
+    height: '100%',
   },
 });

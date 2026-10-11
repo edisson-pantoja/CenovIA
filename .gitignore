@@ -6,10 +6,11 @@ build/
 
 # Variáveis de ambiente — NUNCA commitar!
 .env
-.env.local
-.env.production
-apps/mobile/.env
-packages/backend/.env
+.env.*
+*.env
+**/.env
+**/.env.*
+!**/.env.example
 
 # Expo
 *.jks

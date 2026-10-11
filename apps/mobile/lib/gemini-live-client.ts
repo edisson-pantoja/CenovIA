@@ -18,7 +18,7 @@ export class GeminiLiveClient {
   private reconnectAttempts = 0;
   private readonly maxReconnectAttempts = 3;
   private isIntentionalClose = false;
-  private thinkTimeout: NodeJS.Timeout | null = null;
+  private thinkTimeout: ReturnType<typeof setTimeout> | null = null;
 
   // ── Callbacks públicos ─────────────────────────────────────────────────────
 
@@ -27,6 +27,7 @@ export class GeminiLiveClient {
   onAudioChunk: (data: string, timestampMs: number, mimeType?: string) => void = () => {};
   onBoardEvent: (event: BoardEvent) => void = () => {};
   onTeacherStateChange: (state: TeacherState) => void = () => {};
+  onInterrupted: () => void = () => {};
   onUsageUpdate: (usage: UserUsage) => void = () => {};
   onUsageLimitReached: () => void = () => {};
   onError: (code: string, message: string) => void = () => {};
@@ -95,6 +96,11 @@ export class GeminiLiveClient {
   /** Sinaliza ao backend que o usuário PRESSIONOU o botão PTT (activityStart para o Gemini) */
   sendPTTStart(): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (this.thinkTimeout) {
+      clearTimeout(this.thinkTimeout);
+      this.thinkTimeout = null;
+    }
+    this.onTeacherStateChange('listening');
     this.ws.send(JSON.stringify({ type: 'ptt_start' }));
   }
 
@@ -109,24 +115,55 @@ export class GeminiLiveClient {
   sendTurnComplete(): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.ws.send(JSON.stringify({ type: 'turn_complete' }));
+    this.onTeacherStateChange('thinking');
+
+    // Timeout de 15s aguardando resposta do Gemini
+    if (this.thinkTimeout) clearTimeout(this.thinkTimeout);
+    this.thinkTimeout = setTimeout(() => {
+      console.warn('[GEMINI-CLIENT] Timeout de 15s aguardando resposta da IA');
+      this.onTeacherStateChange('idle');
+      this.onError('TIMEOUT', 'Tempo limite de resposta excedido. Fale ou digite novamente.');
+      this.thinkTimeout = null;
+    }, 15000);
   }
 
   /** Envia mensagem de texto (quando o aluno prefere digitar) */
   sendTextMessage(text: string): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.onTeacherStateChange('thinking');
+    if (this.thinkTimeout) clearTimeout(this.thinkTimeout);
+    this.thinkTimeout = setTimeout(() => {
+      console.warn('[GEMINI-CLIENT] Timeout de 15s aguardando resposta da IA');
+      this.onTeacherStateChange('idle');
+      this.onError('TIMEOUT', 'Tempo limite de resposta excedido.');
+      this.thinkTimeout = null;
+    }, 15000);
     const msg: ClientMessage = { type: 'text_message', text };
     this.ws.send(JSON.stringify(msg));
   }
 
-  /** Sinaliza que o aluno terminou de falar/enviar áudio */
-  sendTurnComplete(): void {
+  /** Envia imagem (caderno / exercício) para o Gemini analisar e explicar */
+  sendImageMessage(base64Data: string, mimeType: string = 'image/jpeg', text?: string): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    this.ws.send(JSON.stringify({ type: 'turn_complete' }));
+    this.onTeacherStateChange('thinking');
+    if (this.thinkTimeout) clearTimeout(this.thinkTimeout);
+    this.thinkTimeout = setTimeout(() => {
+      console.warn('[GEMINI-CLIENT] Timeout de 15s aguardando resposta da IA');
+      this.onTeacherStateChange('idle');
+      this.onError('TIMEOUT', 'Tempo limite de resposta excedido.');
+      this.thinkTimeout = null;
+    }, 15000);
+    const msg: ClientMessage = { type: 'image_message', data: base64Data, mimeType, text };
+    this.ws.send(JSON.stringify(msg));
   }
 
   /** Encerra a sessão e fecha o WebSocket de forma limpa */
   disconnect(): void {
     this.isIntentionalClose = true;
+    if (this.thinkTimeout) {
+      clearTimeout(this.thinkTimeout);
+      this.thinkTimeout = null;
+    }
     if (this.ws) {
       if (this.ws.readyState === WebSocket.OPEN) {
         const msg: ClientMessage = { type: 'session_end' };
@@ -162,7 +199,6 @@ export class GeminiLiveClient {
 
       case 'audio_chunk':
         if (this.thinkTimeout) clearTimeout(this.thinkTimeout);
-        if (this.thinkTimeout) clearTimeout(this.thinkTimeout);
         // Chunk de áudio da professora — repassa para o AudioManager
         this.onAudioChunk(msg.data, msg.timestampMs, msg.mimeType);
         this.onTeacherStateChange('speaking');
@@ -170,15 +206,16 @@ export class GeminiLiveClient {
 
       case 'board_event':
         if (this.thinkTimeout) clearTimeout(this.thinkTimeout);
-        if (this.thinkTimeout) clearTimeout(this.thinkTimeout);
         // Evento de desenho no quadro verde
         this.onBoardEvent(msg.event);
         break;
 
       case 'teacher_state':
         if (this.thinkTimeout) clearTimeout(this.thinkTimeout);
-        if (this.thinkTimeout) clearTimeout(this.thinkTimeout);
         this.onTeacherStateChange(msg.state);
+        if (msg.state === 'interrupted') {
+          this.onInterrupted();
+        }
         break;
 
       case 'usage_update':
