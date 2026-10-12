@@ -43,7 +43,7 @@ function formatTimer(ms: number): string {
 
 export default function ClassroomScreen() {
   const router = useRouter();
-  const { session } = useAuth();
+  const { session, user, signOut } = useAuth();
   const { studyContext, usage, setUsage } = useSession();
 
   // ── Estado da sessão ───────────────────────────────────────────────────────
@@ -65,6 +65,11 @@ export default function ClassroomScreen() {
   const durationTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const frameTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [cameraOn, setCameraOn] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const showToast = useCallback((message: string, type: 'info' | 'warning' | 'error' = 'info') => {
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
@@ -90,6 +95,8 @@ export default function ClassroomScreen() {
       audioManager.cleanup();
       if (durationTimerRef.current) clearInterval(durationTimerRef.current);
       if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+      if (frameTimerRef.current) clearInterval(frameTimerRef.current);
+      streamRef.current?.getTracks().forEach((t) => t.stop());
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -168,11 +175,76 @@ export default function ClassroomScreen() {
     }
   };
 
+  // ── Câmera do aluno (vídeo ao vivo + frames para a professora ver o caderno/gestos) ──
+
+  const stopCamera = useCallback(() => {
+    if (frameTimerRef.current) {
+      clearInterval(frameTimerRef.current);
+      frameTimerRef.current = null;
+    }
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    setCameraOn(false);
+  }, []);
+
+  const startCamera = useCallback(async () => {
+    if (Platform.OS !== 'web' || !navigator.mediaDevices?.getUserMedia) {
+      showToast('Câmera não disponível neste dispositivo.', 'warning');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+        audio: false,
+      });
+      streamRef.current = stream;
+      setCameraOn(true);
+    } catch {
+      showToast('Permita o acesso à câmera no navegador para mostrar seu caderno.', 'warning');
+    }
+  }, [showToast]);
+
+  // Liga o preview e envia ~1 frame/segundo (JPEG pequeno) à professora enquanto a câmera estiver ativa
+  useEffect(() => {
+    if (!cameraOn || !videoRef.current || !streamRef.current) return;
+    const video = videoRef.current;
+    video.srcObject = streamRef.current;
+    video.play().catch(() => {});
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 480;
+    canvas.height = 360;
+    const ctx = canvas.getContext('2d');
+    frameTimerRef.current = setInterval(() => {
+      if (!ctx || video.readyState < 2 || !geminiClient.isConnected) return;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const b64 = canvas.toDataURL('image/jpeg', 0.6).split(',')[1];
+      if (b64) geminiClient.sendVideoFrame(b64);
+    }, 1000);
+
+    return () => {
+      if (frameTimerRef.current) {
+        clearInterval(frameTimerRef.current);
+        frameTimerRef.current = null;
+      }
+    };
+  }, [cameraOn]);
+
   const handleEndSession = () => {
+    stopCamera();
     geminiClient.disconnect();
     audioManager.cleanup();
     if (durationTimerRef.current) clearInterval(durationTimerRef.current);
-    router.back();
+    // Na web não há histórico para voltar: vai direto para a escolha de matéria
+    router.replace('/(auth)/onboarding');
+  };
+
+  const handleSignOut = async () => {
+    stopCamera();
+    geminiClient.disconnect();
+    audioManager.cleanup();
+    await signOut();
+    router.replace('/(auth)/welcome');
   };
 
   // ── Push-To-Talk (gravação de voz) ─────────────────────────────────────────
@@ -797,6 +869,167 @@ export default function ClassroomScreen() {
             display: flex;
           }
 
+          /* ── Layout em coluna lateral: professora (4:3) + aluno, quadro verde ocupa o resto ── */
+          .cenovia-main-row > .cenovia-body-split { flex-direction: row-reverse; }
+
+          .cenovia-body-split .teacher-video-container {
+            flex: none;
+            width: clamp(260px, 26vw, 360px);
+            flex-direction: column;
+            align-items: stretch;
+            justify-content: flex-start;
+            gap: 10px;
+            padding: 10px;
+            box-sizing: border-box;
+            border-left: 1px solid rgba(255, 255, 255, 0.06);
+          }
+
+          .teacher-video-frame {
+            position: relative;
+            flex: none;
+            width: 100%;
+            aspect-ratio: 4 / 3;
+            border-radius: 14px;
+            overflow: hidden;
+            background: #0b131a;
+          }
+
+          .teacher-video-frame .teacher-cam-badge { top: 8px; left: 8px; padding: 4px 10px; font-size: 11px; }
+
+          .cenovia-body-split .student-pip-card {
+            position: relative;
+            top: auto;
+            right: auto;
+            width: 100%;
+            flex: 1;
+            min-height: 130px;
+            display: flex;
+            flex-direction: column;
+            box-sizing: border-box;
+          }
+
+          .cenovia-body-split .student-pip-preview {
+            flex: 1;
+            height: auto;
+            min-height: 0;
+          }
+
+          .student-video {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1);
+          }
+
+          .student-cam-off {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            color: #94a3b8;
+            font-size: 12px;
+            text-align: center;
+            padding: 8px;
+          }
+
+          .student-cam-off-circle {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            background: #2563eb;
+            color: #fff;
+            font-size: 20px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+          }
+
+          .student-cam-on-btn {
+            background: #2563eb;
+            border: none;
+            color: #fff;
+            font-size: 12px;
+            font-weight: 600;
+            padding: 6px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+          }
+
+          .student-cam-on-btn:hover { background: #1d4ed8; }
+          .student-cam-dot-off { background-color: #64748b !important; }
+
+          .chat-action-btn.cam-active {
+            background: rgba(239, 68, 68, 0.18);
+            border-color: rgba(239, 68, 68, 0.6);
+            color: #fecaca;
+          }
+
+          @media (max-width: 900px) {
+            .cenovia-main-row > .cenovia-body-split { flex-direction: column; }
+            .cenovia-body-split .teacher-video-container {
+              width: auto;
+              flex-direction: row;
+              height: 150px;
+              border-left: none;
+            }
+            .teacher-video-frame { width: auto; height: 100%; flex: none; }
+            .cenovia-body-split .student-pip-card { min-height: 0; }
+          }
+
+          /* ── Modal de Configurações ── */
+          .settings-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(2, 6, 12, 0.65);
+            backdrop-filter: blur(4px);
+            z-index: 200;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+          }
+
+          .settings-modal {
+            width: min(420px, 92vw);
+            background: #0f1722;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 22px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+          }
+
+          .settings-modal h2 { margin: 0 0 14px; font-size: 17px; }
+          .settings-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 10px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+            font-size: 13px;
+            color: #cbd5e1;
+          }
+          .settings-row strong { color: #fff; font-weight: 600; }
+          .settings-actions { display: flex; gap: 10px; margin-top: 18px; justify-content: flex-end; }
+          .settings-btn {
+            background: rgba(255, 255, 255, 0.07);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            color: #e2e8f0;
+            font-size: 13px;
+            font-weight: 600;
+            padding: 8px 16px;
+            border-radius: 10px;
+            cursor: pointer;
+          }
+          .settings-btn:hover { background: rgba(255, 255, 255, 0.14); }
+          .settings-btn.danger { background: #ef4444; border-color: #ef4444; color: #fff; }
+          .settings-btn.danger:hover { background: #dc2626; }
+
           /* ── Barra Inferior de Chat & Ações (Mockup) ── */
           .cenovia-chat-bar {
             height: 64px;
@@ -977,7 +1210,7 @@ export default function ClassroomScreen() {
           </div>
 
           <div className="header-right">
-            <button className="header-settings-btn" title="Configurações">
+            <button className="header-settings-btn" title="Configurações" onClick={() => setSettingsOpen(true)}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <circle cx="12" cy="12" r="3" />
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
@@ -1080,6 +1313,7 @@ export default function ClassroomScreen() {
 
           {/* ── Metade Superior: Vídeo da Professora + PIP do Aluno ── */}
           <section className="teacher-video-container" aria-label="Transmissão da professora">
+            <div className="teacher-video-frame">
             <Image
               source={require('../../assets/images/teacher.jpg')}
               style={styles.teacherVideoImage}
@@ -1111,32 +1345,29 @@ export default function ClassroomScreen() {
                 {teacherState === 'reconnecting' ? 'Reconectando...' : 'Online'}
               </span>
             </div>
+            </div>
 
-            {/* Card: Aluno PIP (Canto Superior Direito) */}
+            {/* Card: Aluno (vídeo real da câmera ou avatar com botão para ligar) */}
             <div className="student-pip-card">
               <div className="student-pip-header">
                 <div className="student-avatar-icon">A</div>
                 <div className="student-pip-info">
                   <span className="student-pip-name">Aluno</span>
-                  <div className="student-pip-status">
-                    <span className="cam-dot" />
-                    <span>Conectado</span>
+                  <div className="student-pip-status" style={{ color: cameraOn ? '#10b981' : '#94a3b8' }}>
+                    <span className={`cam-dot ${cameraOn ? '' : 'student-cam-dot-off'}`} />
+                    <span>{cameraOn ? 'Câmera ativa' : 'Câmera desligada'}</span>
                   </div>
                 </div>
               </div>
               <div className="student-pip-preview">
-                <Image
-                  source={require('../../assets/images/student_pip.jpg')}
-                  style={styles.studentPipPreviewImg}
-                  resizeMode="cover"
-                />
-                <div className="student-cam-tag">
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <polygon points="23 7 16 12 23 17 23 7" />
-                    <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
-                  </svg>
-                  <span>Sua câmera</span>
-                </div>
+                {cameraOn ? (
+                  <video ref={videoRef} className="student-video" muted playsInline />
+                ) : (
+                  <div className="student-cam-off">
+                    <div className="student-cam-off-circle">{(user?.email?.[0] || 'A').toUpperCase()}</div>
+                    <button className="student-cam-on-btn" onClick={startCamera}>Ligar câmera</button>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -1206,6 +1437,19 @@ export default function ClassroomScreen() {
             </button>
           </div>
 
+          {/* Botão de Câmera (mostrar caderno / gestos à professora) */}
+          <button
+            className={`chat-action-btn ${cameraOn ? 'cam-active' : ''}`}
+            onClick={cameraOn ? stopCamera : startCamera}
+            title={cameraOn ? 'Desligar câmera' : 'Ligar câmera para mostrar algo à professora'}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polygon points="23 7 16 12 23 17 23 7" />
+              <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+            </svg>
+            <span>{cameraOn ? 'Desligar câmera' : 'Câmera'}</span>
+          </button>
+
           {/* Botão Push-to-Talk (Microfone) */}
           <button
             className={`chat-ptt-btn ${isRecording ? 'recording' : ''}`}
@@ -1231,6 +1475,39 @@ export default function ClassroomScreen() {
             <span>Enviar</span>
           </button>
         </footer>
+
+        {/* ── Modal de Configurações ── */}
+        {settingsOpen && (
+          <div className="settings-overlay" onClick={() => setSettingsOpen(false)}>
+            <div className="settings-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Configurações">
+              <h2>Configurações</h2>
+              <div className="settings-row">
+                <span>Conta</span>
+                <strong>{user?.email || '—'}</strong>
+              </div>
+              <div className="settings-row">
+                <span>Minutos restantes no mês</span>
+                <strong>{usage ? `${Math.round(usage.minutesRemaining)} de ${usage.minutesLimit}` : '—'}</strong>
+              </div>
+              <div className="settings-row">
+                <span>Painel do plano de estudos</span>
+                <button className="settings-btn" onClick={() => setPlanOpen((v) => !v)}>
+                  {planOpen ? 'Recolher' : 'Mostrar'}
+                </button>
+              </div>
+              <div className="settings-row">
+                <span>Câmera</span>
+                <button className="settings-btn" onClick={cameraOn ? stopCamera : startCamera}>
+                  {cameraOn ? 'Desligar' : 'Ligar'}
+                </button>
+              </div>
+              <div className="settings-actions">
+                <button className="settings-btn danger" onClick={handleSignOut}>Sair da conta</button>
+                <button className="settings-btn" onClick={() => setSettingsOpen(false)}>Fechar</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </SafeAreaView>
   );

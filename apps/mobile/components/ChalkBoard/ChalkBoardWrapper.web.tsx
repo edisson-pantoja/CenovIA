@@ -88,11 +88,11 @@ interface ChalkItemProps {
 }
 
 /** Revela o conteúdo da esquerda para a direita enquanto uma mão com giz acompanha o traço */
-function ChalkItem({ schedule, style, children }: ChalkItemProps) {
+function ChalkItem({ schedule, children }: ChalkItemProps) {
   const timing = `${schedule.dur}ms linear ${schedule.delay}ms both`;
   const handTiming = `${schedule.dur}ms linear ${schedule.delay}ms forwards`;
   return (
-    <div className="chalk-element" style={style}>
+    <div className="chalk-element">
       <div className="chalk-reveal" style={{ animation: `chalkWriteReveal ${timing}` }}>
         {children}
       </div>
@@ -301,10 +301,27 @@ export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) 
         }
 
         .chalk-element {
-          position: absolute;
+          position: relative;
           z-index: 2;
           pointer-events: none;
+          width: calc(50% - 13px);
+          box-sizing: border-box;
         }
+
+        /* Fluxo automático: os elementos entram em ordem de leitura e nunca se sobrepõem */
+        .chalk-flow {
+          position: absolute;
+          inset: 14px 22px;
+          display: flex;
+          flex-direction: column;
+          flex-wrap: wrap;
+          align-content: flex-start;
+          gap: 12px 26px;
+          overflow: hidden;
+          z-index: 2;
+        }
+
+        .chalk-note-box { max-width: 100%; box-sizing: border-box; min-width: 0; }
 
         .chalk-reveal {
           display: inline-block;
@@ -529,6 +546,7 @@ export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) 
           <div className="chalk-dust-overlay" />
 
           {/* Renderização dinâmica dos elementos recebidos do Gemini */}
+          <div className="chalk-flow">
           {renderableEvents.map((event) => {
             const rawX = 'x' in event ? (event as any).x : 0.08;
             const rawY = 'y' in event ? (event as any).y : 0.12;
@@ -690,6 +708,7 @@ export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) 
 
             return null;
           })}
+          </div>
 
           {/* Dica visual suave quando ainda não há conteúdo */}
           {renderableEvents.length === 0 && (

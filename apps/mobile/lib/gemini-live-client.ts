@@ -158,6 +158,13 @@ export class GeminiLiveClient {
     this.ws.send(JSON.stringify(msg));
   }
 
+  /** Envia um frame JPEG da câmera do aluno (~1 fps) para a professora "ver" o que ele mostra */
+  sendVideoFrame(base64Jpeg: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const msg: ClientMessage = { type: 'video_frame', data: base64Jpeg };
+    this.ws.send(JSON.stringify(msg));
+  }
+
   /** Encerra a sessão e fecha o WebSocket de forma limpa */
   disconnect(): void {
     this.isIntentionalClose = true;

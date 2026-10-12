@@ -177,6 +177,7 @@ export type ClientMessage =
   | { type: 'audio_chunk'; data: string; mimeType?: string }
   | { type: 'text_message'; text: string }
   | { type: 'image_message'; data: string; mimeType?: string; text?: string }
+  | { type: 'video_frame'; data: string }
   | { type: 'session_end' }
   | { type: 'ptt_start' }
   | { type: 'turn_complete' };
