@@ -20,6 +20,9 @@ export const handleRelayConnection = (clientWs: WebSocket, request: IncomingMess
   let studyContext: any = null;
   let sessionStartMs = Date.now();
   let resumptionHandle: string | null = null;
+  let connectionResumed = false;
+  let pttPending = false;
+  let pttStarted = false;
   let studyPlan: StudyPlanState = emptyStudyPlan();
   let isInitialConnection = true;
   let reconnectAttempts = 0;
@@ -95,6 +98,7 @@ export const handleRelayConnection = (clientWs: WebSocket, request: IncomingMess
     geminiWs = new WebSocket(GEMINI_WS_URL);
 
     geminiWs.on('open', async () => {
+      connectionResumed = !!resumptionHandle;
       console.log(`[RELAY] Conectado ao Gemini Live para usuário ${userId} (resumed=${!isInitialConnection}, handle=${resumptionHandle || 'none'})`);
 
       const systemInstruction = `Você é CenovIA, uma professora particular afetuosa, paciente e muito didática de ${context?.subjectName || 'várias matérias'} para ${context?.gradeLabel || 'o aluno'}.
@@ -280,8 +284,17 @@ PLANO DE ESTUDOS (obrigatório, use a ferramenta study_plan):
               }
             }));
           } else {
-            console.log('[RELAY] Sessão Gemini reconectada com sucesso usando handle');
+            console.log(`[RELAY] Sessão Gemini reconectada (${connectionResumed ? 'com handle' : 'sessão nova, reinjetando plano'})`);
             clientWs.send(JSON.stringify({ type: 'teacher_state', state: 'idle' }));
+            if (!connectionResumed && geminiWs && geminiWs.readyState === WebSocket.OPEN) {
+              // Sessão nova (contexto perdido): retoma do ponto em que estávamos usando o plano de estudos
+              geminiWs.send(JSON.stringify({
+                clientContent: {
+                  turns: [{ role: 'user', parts: [{ text: 'A conexão caiu e foi restabelecida. Peça desculpas em uma frase curta e retome a aula exatamente no tópico atual do plano de estudos (se houver), sem recomeçar do zero.' }] }],
+                  turnComplete: true
+                }
+              }));
+            }
           }
         }
 
@@ -349,6 +362,13 @@ PLANO DE ESTUDOS (obrigatório, use a ferramenta study_plan):
       console.log(`[RELAY] Gemini connection closed: code=${code} reason=${reason?.toString()}`);
       if (keepaliveInterval) { clearInterval(keepaliveInterval); keepaliveInterval = null; }
       geminiWs = null;
+      pttPending = false;
+      pttStarted = false;
+
+      // 1007/1008: a sessão foi invalidada pelo Gemini — o handle não serve mais, recomeça limpo
+      if (code === 1007 || code === 1008) {
+        resumptionHandle = null;
+      }
 
       if (clientWs.readyState === WebSocket.OPEN) {
         scheduleReconnect();
@@ -406,11 +426,12 @@ PLANO DE ESTUDOS (obrigatório, use a ferramenta study_plan):
 
       } else if (geminiWs && geminiWs.readyState === WebSocket.OPEN) {
         if (msg.type === 'ptt_start') {
-          console.log('[RELAY] PTT Start -> activityStart');
+          // Só enviamos activityStart quando chegar o 1º áudio: um toque vazio no PTT
+          // (start/end sem áudio) derrubava a sessão com 1007 "Precondition check failed"
+          console.log('[RELAY] PTT Start (aguardando áudio)');
+          pttPending = true;
+          pttStarted = false;
           hasInputInCurrentTurn = true;
-          geminiWs.send(JSON.stringify({
-            realtimeInput: { activityStart: {} }
-          }));
         } else if (msg.type === 'audio_chunk') {
           const mimeType = msg.mimeType || 'audio/pcm;rate=16000';
           const base64Data = msg.data as string;
@@ -419,6 +440,11 @@ PLANO DE ESTUDOS (obrigatório, use a ferramenta study_plan):
             console.warn('[RELAY] audio_chunk vazio, ignorando');
           } else {
             hasInputInCurrentTurn = true;
+            if (pttPending && !pttStarted) {
+              console.log('[RELAY] Primeiro áudio -> activityStart');
+              geminiWs.send(JSON.stringify({ realtimeInput: { activityStart: {} } }));
+              pttStarted = true;
+            }
             geminiWs.send(JSON.stringify({
               realtimeInput: {
                 audio: { data: base64Data, mimeType }
@@ -427,11 +453,18 @@ PLANO DE ESTUDOS (obrigatório, use a ferramenta study_plan):
           }
 
         } else if (msg.type === 'turn_complete') {
-          console.log('[RELAY] PTT End -> activityEnd');
           hasInputInCurrentTurn = false;
-          geminiWs.send(JSON.stringify({
-            realtimeInput: { activityEnd: {} }
-          }));
+          if (pttStarted) {
+            console.log('[RELAY] PTT End -> activityEnd');
+            geminiWs.send(JSON.stringify({
+              realtimeInput: { activityEnd: {} }
+            }));
+          } else {
+            console.log('[RELAY] PTT vazio (sem áudio) — ignorado');
+            clientWs.send(JSON.stringify({ type: 'teacher_state', state: 'idle' }));
+          }
+          pttPending = false;
+          pttStarted = false;
 
         } else if (msg.type === 'text_message') {
           hasInputInCurrentTurn = false;
@@ -461,9 +494,13 @@ PLANO DE ESTUDOS (obrigatório, use a ferramenta study_plan):
             }
           }));
         }
-      } else if (geminiWs && geminiWs.readyState !== WebSocket.OPEN) {
-        console.warn('[RELAY] Mensagem recebida mas Gemini WS não está aberto, agendando reconexão...');
-        scheduleReconnect();
+      } else if (isAuthenticated && msg.type !== 'session_end') {
+        // Gemini fora do ar: uma ação do aluno reanima a conexão (mesmo após esgotar as tentativas)
+        if (!reconnectTimeout && !geminiWs) {
+          console.warn('[RELAY] Ação do aluno com Gemini desconectado — reiniciando conexão');
+          reconnectAttempts = 0;
+          scheduleReconnect();
+        }
       }
     } catch (error) {
       console.error('[RELAY] Error parsing client message:', error);
