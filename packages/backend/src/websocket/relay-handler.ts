@@ -3,6 +3,8 @@ import { IncomingMessage } from 'http';
 import { verifyWebSocketToken } from '../middleware/auth';
 import { UsageService } from '../services/usage-service';
 import { normalizeBoardCall } from './board-normalizer';
+import { applyStudyPlanCall, describeStudyPlan, emptyStudyPlan } from './study-plan';
+import type { StudyPlanState } from '@cenovia/shared';
 import config from '../config';
 
 const GEMINI_WS_URL = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${config.geminiApiKey}`;
@@ -18,6 +20,7 @@ export const handleRelayConnection = (clientWs: WebSocket, request: IncomingMess
   let studyContext: any = null;
   let sessionStartMs = Date.now();
   let resumptionHandle: string | null = null;
+  let studyPlan: StudyPlanState = emptyStudyPlan();
   let isInitialConnection = true;
   let reconnectAttempts = 0;
 
@@ -107,7 +110,16 @@ Regras fundamentais de uso do quadro verde:
 - Escreva no quadro ANTES de explicar em voz.
 Se o aluno interromper você, pare de falar imediatamente e escute.
 Seja encorajadora e positiva. Celebre quando o aluno acertar.
-Ao iniciar a sessão, cumprimente o aluno de forma calorosa e pergunte o que ele gostaria de aprender hoje.`;
+Ao iniciar a sessão, cumprimente o aluno de forma calorosa e pergunte o que ele gostaria de aprender hoje.
+
+PLANO DE ESTUDOS (obrigatório, use a ferramenta study_plan):
+1. Quando o aluno disser o tema (ex.: "divisão celular"), monte uma lista de 4 a 7 tópicos em ordem didática com study_plan action 'create'. Diga os tópicos em voz alta e PERGUNTE se é isso que ele quer estudar e se quer pular ou incluir algum. Só depois da resposta use action 'confirm'.
+2. Se o aluno pedir para pular/retirar um tópico, use action 'remove'; para incluir, 'add'.
+3. Ensine UM tópico por vez, na ordem. Ao começar um tópico use 'set_current'; ao terminar de explicá-lo e confirmar que o aluno entendeu, use 'complete' (o painel lateral marca com ✔ automaticamente).
+4. O painel lateral mostra a lista de forma permanente: NÃO reescreva a lista de tópicos no quadro verde. Use o quadro só para explicar o tópico atual.
+5. Se o aluno pedir para aprofundar ou tirar uma dúvida, responda sem mudar o tópico atual do plano. Depois de responder, pergunte "Podemos voltar ao plano de estudos?" e retome exatamente o tópico atual.
+6. Se o aluno ficar em silêncio ou disser algo como "ok", pergunte "Podemos seguir com a aula?"; se ele responder que sim, continue no tópico atual (nunca volte ao início da lista).
+7. Quando todos os tópicos estiverem concluídos, faça um breve resumo e pergunte se ele quer revisar algo ou estudar outro tema.${describeStudyPlan(studyPlan)}`;
 
       const modelName = config.geminiModel.startsWith('models/')
         ? config.geminiModel
@@ -149,6 +161,20 @@ Ao iniciar a sessão, cumprimente o aluno de forma calorosa e pergunte o que ele
                   },
                 },
                 required: ['elements'],
+              },
+            }, {
+              name: 'study_plan',
+              description: 'Gerencia a lista fixa de tópicos de estudo exibida no painel lateral do aluno. Use para criar, confirmar, marcar o tópico atual, concluir, remover ou adicionar tópicos.',
+              parameters: {
+                type: 'object',
+                properties: {
+                  action: { type: 'string', enum: ['create', 'confirm', 'set_current', 'complete', 'remove', 'add'] },
+                  theme: { type: 'string', description: 'Tema geral (apenas em create)' },
+                  topics: { type: 'array', items: { type: 'string' }, description: 'Títulos dos tópicos em ordem (apenas em create)' },
+                  topic: { type: 'string', description: 'id (ex.: t2), posição (1,2,3...) ou parte do título do tópico alvo' },
+                  title: { type: 'string', description: 'Título do novo tópico (apenas em add)' },
+                },
+                required: ['action'],
               },
             }],
           }],
@@ -280,6 +306,14 @@ Ao iniciar a sessão, cumprimente o aluno de forma calorosa e pergunte o que ele
               for (const ev of events) {
                 clientWs.send(JSON.stringify({ type: 'board_event', event: ev }));
               }
+            }
+            if (fc.name === 'study_plan') {
+              console.log('[RELAY] study_plan function call:', JSON.stringify(fc.args));
+              const { plan, result } = applyStudyPlanCall(studyPlan, fc.args);
+              studyPlan = plan;
+              clientWs.send(JSON.stringify({ type: 'study_plan', plan: studyPlan }));
+              responses.push({ id: fc.id, name: fc.name, response: result });
+              continue;
             }
             responses.push({ id: fc.id, name: fc.name, response: { result: 'ok' } });
           }

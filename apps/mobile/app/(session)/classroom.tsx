@@ -26,7 +26,7 @@ import { useSession } from '../../context/SessionContext';
 import { geminiClient } from '../../lib/gemini-live-client';
 import { audioManager } from '../../lib/audio-manager';
 import { COLORS } from '../../lib/constants';
-import type { BoardEvent, TeacherState, UserUsage } from '@cenovia/shared';
+import type { BoardEvent, StudyPlanState, TeacherState, UserUsage } from '@cenovia/shared';
 
 import ChalkBoardWrapper from '../../components/ChalkBoard/ChalkBoardWrapper';
 import AudioReplayPlayer from '../../components/AudioReplayPlayer';
@@ -57,6 +57,8 @@ export default function ClassroomScreen() {
   const [inputText, setInputText] = useState('');
   const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'info' | 'warning' | 'error' } | null>(null);
+  const [studyPlan, setStudyPlan] = useState<StudyPlanState | null>(null);
+  const [planOpen, setPlanOpen] = useState(true);
 
   // Temporizador da sessão
   const sessionStartRef = useRef<number>(Date.now());
@@ -121,6 +123,10 @@ export default function ClassroomScreen() {
       if (state === 'reconnecting') {
         showToast('Reconectando à professora...', 'warning');
       }
+    };
+
+    geminiClient.onStudyPlan = (plan) => {
+      setStudyPlan(plan);
     };
 
     geminiClient.onInterrupted = () => {
@@ -434,6 +440,144 @@ export default function ClassroomScreen() {
           .header-end-btn:hover {
             background: #dc2626;
             box-shadow: 0 4px 14px rgba(239, 68, 68, 0.45);
+          }
+
+          /* ── Painel lateral: Plano de estudos ── */
+          .cenovia-main-row {
+            flex: 1;
+            display: flex;
+            flex-direction: row;
+            min-height: 0;
+            overflow: hidden;
+          }
+
+          .cenovia-main-row > .cenovia-body-split { flex: 1; min-width: 0; }
+
+          .study-panel {
+            width: 250px;
+            flex-shrink: 0;
+            background: #0f1722;
+            border-right: 1px solid rgba(255, 255, 255, 0.08);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            transition: width 0.25s ease;
+          }
+
+          .study-panel.collapsed { width: 40px; }
+
+          .study-panel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 12px 8px;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: #94a3b8;
+          }
+
+          .study-panel.collapsed .study-panel-title,
+          .study-panel.collapsed .study-panel-theme,
+          .study-panel.collapsed .study-topic-list,
+          .study-panel.collapsed .study-panel-progress,
+          .study-panel.collapsed .study-panel-empty { display: none; }
+
+          .study-panel-toggle {
+            background: transparent;
+            border: none;
+            color: #94a3b8;
+            cursor: pointer;
+            font-size: 16px;
+            padding: 2px 6px;
+          }
+
+          .study-panel-theme {
+            padding: 0 12px 8px;
+            font-size: 15px;
+            font-weight: 700;
+            color: #fde68a;
+          }
+
+          .study-panel-progress {
+            margin: 0 12px 10px;
+            height: 4px;
+            border-radius: 4px;
+            background: rgba(255, 255, 255, 0.1);
+            overflow: hidden;
+          }
+
+          .study-panel-progress > div {
+            height: 100%;
+            background: #10b981;
+            transition: width 0.4s ease;
+          }
+
+          .study-panel-empty {
+            padding: 8px 14px;
+            font-size: 13px;
+            color: #64748b;
+            line-height: 1.5;
+          }
+
+          .study-topic-list {
+            list-style: none;
+            margin: 0;
+            padding: 0 8px 12px;
+            overflow-y: auto;
+            flex: 1;
+          }
+
+          .study-topic {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            width: 100%;
+            text-align: left;
+            background: transparent;
+            border: 1px solid transparent;
+            border-radius: 10px;
+            padding: 9px 10px;
+            margin-bottom: 4px;
+            color: #cbd5e1;
+            font-size: 13px;
+            line-height: 1.35;
+            font-family: inherit;
+            cursor: pointer;
+            transition: background 0.2s, border-color 0.2s;
+          }
+
+          .study-topic:hover { background: rgba(255, 255, 255, 0.06); }
+
+          .study-topic.current {
+            background: rgba(59, 130, 246, 0.16);
+            border-color: rgba(59, 130, 246, 0.55);
+            color: #ffffff;
+            font-weight: 600;
+          }
+
+          .study-topic.done { color: #6ee7b7; }
+          .study-topic.done .study-topic-text { text-decoration: line-through; opacity: 0.8; }
+
+          .study-topic-flag {
+            flex-shrink: 0;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            border: 1.5px solid #475569;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            margin-top: 1px;
+          }
+
+          .study-topic.done .study-topic-flag { background: #10b981; border-color: #10b981; color: #052e1f; }
+          .study-topic.current .study-topic-flag { border-color: #60a5fa; }
+
+          @media (max-width: 720px) {
+            .study-panel { width: 190px; }
           }
 
           /* ── Corpo Principal (Split 50/50) ── */
@@ -883,7 +1027,55 @@ export default function ClassroomScreen() {
           <UsageBanner minutesRemaining={usage.minutesRemaining} minutesLimit={usage.minutesLimit} />
         )}
 
-        {/* ── 2. Corpo Split (50% Vídeo Professora / 50% Quadro Verde) ── */}
+        {/* ── 2. Linha principal: Painel de tópicos + (Vídeo Professora / Quadro Verde) ── */}
+        <div className="cenovia-main-row">
+        <aside className={`study-panel ${planOpen ? '' : 'collapsed'}`} aria-label="Plano de estudos">
+          <div className="study-panel-header">
+            <span className="study-panel-title">Plano de estudos</span>
+            <button
+              className="study-panel-toggle"
+              onClick={() => setPlanOpen((v) => !v)}
+              title={planOpen ? 'Recolher painel' : 'Abrir plano de estudos'}
+            >
+              {planOpen ? '‹' : '›'}
+            </button>
+          </div>
+          {studyPlan && studyPlan.topics.length > 0 ? (
+            <>
+              <div className="study-panel-theme">{studyPlan.theme || studyContext?.subjectName}</div>
+              <div className="study-panel-progress">
+                <div
+                  style={{
+                    width: `${Math.round((studyPlan.topics.filter((t) => t.done).length / studyPlan.topics.length) * 100)}%`,
+                  }}
+                />
+              </div>
+              <ul className="study-topic-list">
+                {studyPlan.topics.map((t) => (
+                  <li key={t.id}>
+                    <button
+                      className={`study-topic ${t.done ? 'done' : ''} ${t.id === studyPlan.currentTopicId ? 'current' : ''}`}
+                      onClick={() => {
+                        if (!isConnected) return;
+                        geminiClient.sendTextMessage(`Quero ir para o tópico "${t.title}" do plano de estudos.`);
+                      }}
+                      title="Ir para este tópico"
+                    >
+                      <span className="study-topic-flag">{t.done ? '✓' : ''}</span>
+                      <span className="study-topic-text">{t.title}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <div className="study-panel-empty">
+              Diga à professora o que você quer estudar. Os tópicos da aula aparecerão aqui e serão marcados à medida que forem concluídos.
+            </div>
+          )}
+        </aside>
+
+        {/* ── Corpo Split (50% Vídeo Professora / 50% Quadro Verde) ── */}
         <div className="cenovia-body-split">
 
           {/* ── Metade Superior: Vídeo da Professora + PIP do Aluno ── */}
@@ -967,6 +1159,7 @@ export default function ClassroomScreen() {
               replayTimeMs={replayTimeMs}
             />
           </section>
+        </div>
         </div>
 
         {/* ── 3. Barra Inferior de Chat & Ações (Exatamente como o Mockup) ── */}

@@ -11,7 +11,7 @@
  */
 
 import { BACKEND_WS_URL } from './constants';
-import type { BoardEvent, ClientMessage, ServerMessage, StudyContext, TeacherState, UserUsage } from '@cenovia/shared';
+import type { BoardEvent, ClientMessage, ServerMessage, StudyContext, StudyPlanState, TeacherState, UserUsage } from '@cenovia/shared';
 
 export class GeminiLiveClient {
   private ws: WebSocket | null = null;
@@ -28,6 +28,7 @@ export class GeminiLiveClient {
   onBoardEvent: (event: BoardEvent) => void = () => {};
   onTeacherStateChange: (state: TeacherState) => void = () => {};
   onInterrupted: () => void = () => {};
+  onStudyPlan: (plan: StudyPlanState) => void = () => {};
   onUsageUpdate: (usage: UserUsage) => void = () => {};
   onUsageLimitReached: () => void = () => {};
   onError: (code: string, message: string) => void = () => {};
@@ -216,6 +217,10 @@ export class GeminiLiveClient {
         if (msg.state === 'interrupted') {
           this.onInterrupted();
         }
+        break;
+
+      case 'study_plan':
+        this.onStudyPlan(msg.plan);
         break;
 
       case 'usage_update':

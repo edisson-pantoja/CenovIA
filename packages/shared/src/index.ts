@@ -151,6 +151,23 @@ export type BoardEvent =
   | NoteBoxBoardEvent;
 
 // -----------------------------------------------------------
+// Plano de Estudos (painel lateral de tópicos)
+// -----------------------------------------------------------
+
+export interface StudyTopic {
+  id: string;
+  title: string;
+  done: boolean;
+}
+
+export interface StudyPlanState {
+  theme: string;
+  topics: StudyTopic[];
+  currentTopicId: string | null;
+  confirmed: boolean;
+}
+
+// -----------------------------------------------------------
 // Protocolo WebSocket (Client ↔ Backend Relay)
 // -----------------------------------------------------------
 
@@ -170,6 +187,7 @@ export type ServerMessage =
   | { type: 'audio_chunk'; data: string; timestampMs: number; mimeType?: string }
   | { type: 'board_event'; event: BoardEvent }
   | { type: 'teacher_state'; state: TeacherState }
+  | { type: 'study_plan'; plan: StudyPlanState }
   | { type: 'usage_update'; usage: UserUsage }
   | { type: 'usage_limit_reached'; minutesLimit: number }
   | { type: 'error'; code: ErrorCode; message: string };

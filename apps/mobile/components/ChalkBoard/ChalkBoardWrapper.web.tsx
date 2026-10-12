@@ -10,7 +10,7 @@
  * - Animação de escrita progressiva de giz (chalk reveal)
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import katex from 'katex';
 import type { BoardEvent, NoteBoxBoardEvent, TextBoardEvent, LatexBoardEvent, SvgPathBoardEvent } from '@cenovia/shared';
 
@@ -46,7 +46,67 @@ function renderLatexToHtml(formula: string, displayMode = false): string {
   }
 }
 
+// ── Escrita lenta: cada elemento é "escrito" em sequência, com uma mão segurando o giz ──
+
+interface Schedule {
+  delay: number; // ms até começar a escrever
+  dur: number;   // ms que leva para escrever
+}
+
+const MS_PER_CHAR = 75;
+
+function estimateWriteDuration(event: BoardEvent): number {
+  let chars = 20;
+  if (event.type === 'text') chars = (event as TextBoardEvent).content.length;
+  else if (event.type === 'latex') chars = (event as LatexBoardEvent).formula.length;
+  else if (event.type === 'note_box') chars = (event as NoteBoxBoardEvent).content.length;
+  else if (event.type === 'svg_path') return 2500;
+  return Math.min(8000, Math.max(1100, chars * MS_PER_CHAR));
+}
+
+const ChalkHand = () => (
+  <svg className="chalk-hand" width="46" height="58" viewBox="0 0 46 58" aria-hidden="true">
+    {/* giz */}
+    <rect x="4" y="2" width="7" height="20" rx="2" fill="#fffdf0" transform="rotate(-28 8 12)" />
+    {/* dedos / mão */}
+    <path
+      d="M12 16c3-3 8-3 11 0l9 8c3 3 3 8 0 12l-6 8c-2 3-6 4-9 2l-8-6c-3-2-4-6-2-9l5-7z"
+      fill="#e8b894"
+      stroke="#b8845f"
+      strokeWidth="1.2"
+    />
+    <path d="M16 22l7 4M15 28l8 3" stroke="#b8845f" strokeWidth="1.1" strokeLinecap="round" fill="none" />
+    {/* manga */}
+    <path d="M20 44l16 10c3 2 7 1 8-2l1-5-17-10z" fill="#334155" />
+  </svg>
+);
+
+interface ChalkItemProps {
+  schedule: Schedule;
+  style: React.CSSProperties;
+  children: React.ReactNode;
+}
+
+/** Revela o conteúdo da esquerda para a direita enquanto uma mão com giz acompanha o traço */
+function ChalkItem({ schedule, style, children }: ChalkItemProps) {
+  const timing = `${schedule.dur}ms linear ${schedule.delay}ms both`;
+  const handTiming = `${schedule.dur}ms linear ${schedule.delay}ms forwards`;
+  return (
+    <div className="chalk-element" style={style}>
+      <div className="chalk-reveal" style={{ animation: `chalkWriteReveal ${timing}` }}>
+        {children}
+      </div>
+      <div className="chalk-hand-track" style={{ animation: `chalkHandMove ${handTiming}` }}>
+        <ChalkHand />
+      </div>
+    </div>
+  );
+}
+
 export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) {
+  const scheduleRef = useRef<Map<string, Schedule>>(new Map());
+  const queueEndRef = useRef(0);
+  const lastClearSeenRef = useRef(-1);
   const [selectedTool, setSelectedTool] = useState<'pen' | 'chalk' | 'eraser' | 'text' | 'shapes'>('chalk');
   const [isClearing, setIsClearing] = useState(false);
 
@@ -92,6 +152,28 @@ export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) 
       return () => clearTimeout(timer);
     }
   }, [lastClearIndex]);
+
+  // Agenda a escrita sequencial (um elemento por vez; novo clear zera a fila)
+  if (lastClearSeenRef.current !== lastClearIndex) {
+    lastClearSeenRef.current = lastClearIndex;
+    queueEndRef.current = 0;
+  }
+  const getSchedule = (event: BoardEvent): Schedule => {
+    const known = scheduleRef.current.get(event.id);
+    if (known) return known;
+    let sched: Schedule;
+    if (replayTimeMs !== undefined) {
+      sched = { delay: 0, dur: 250 };
+    } else {
+      const now = Date.now();
+      const start = Math.max(now, queueEndRef.current);
+      const dur = estimateWriteDuration(event);
+      sched = { delay: start - now, dur };
+      queueEndRef.current = start + dur;
+    }
+    scheduleRef.current.set(event.id, sched);
+    return sched;
+  };
 
   return (
     <div className="cenovia-chalkboard-root">
@@ -220,9 +302,43 @@ export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) 
 
         .chalk-element {
           position: absolute;
-          animation: chalkWriteReveal 600ms cubic-bezier(0.2, 0.8, 0.25, 1) forwards;
           z-index: 2;
           pointer-events: none;
+        }
+
+        .chalk-reveal {
+          display: inline-block;
+        }
+
+        /* Mão com giz: acompanha a borda direita do texto sendo revelado */
+        .chalk-hand-track {
+          position: absolute;
+          top: 0;
+          left: 0;
+          height: 100%;
+          width: 0;
+          opacity: 0;
+          pointer-events: none;
+        }
+
+        .chalk-hand {
+          position: absolute;
+          left: 100%;
+          top: 55%;
+          transform: translate(-6px, -2px);
+          filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.5));
+          animation: chalkHandWiggle 380ms ease-in-out infinite;
+        }
+
+        @keyframes chalkHandMove {
+          0%   { width: 0; opacity: 1; }
+          97%  { opacity: 1; }
+          100% { width: 100%; opacity: 0; }
+        }
+
+        @keyframes chalkHandWiggle {
+          0%, 100% { rotate: -4deg; }
+          50%      { rotate: 5deg; }
         }
 
         /* ── Estilos de Texto e Giz ── */
@@ -425,9 +541,9 @@ export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) 
               const color = resolveChalkColor(textEvent.color, isTitle ? '#F6E27A' : '#F5F5DC');
 
               return (
-                <div
+                <ChalkItem
                   key={event.id}
-                  className="chalk-element"
+                  schedule={getSchedule(event)}
                   style={{ left: posX, top: posY }}
                 >
                   {isTitle ? (
@@ -469,7 +585,7 @@ export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) 
                       )}
                     </div>
                   )}
-                </div>
+                </ChalkItem>
               );
             }
 
@@ -478,9 +594,9 @@ export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) 
               const html = renderLatexToHtml(latexEvent.formula, true);
 
               return (
-                <div
+                <ChalkItem
                   key={event.id}
-                  className="chalk-element"
+                  schedule={getSchedule(event)}
                   style={{
                     left: posX,
                     top: posY,
@@ -491,7 +607,7 @@ export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) 
                     className="chalk-latex-item"
                     dangerouslySetInnerHTML={{ __html: html }}
                   />
-                </div>
+                </ChalkItem>
               );
             }
 
@@ -506,9 +622,9 @@ export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) 
               const bodyLines = hasHeader ? rawLines.slice(1) : rawLines;
 
               return (
-                <div
+                <ChalkItem
                   key={event.id}
-                  className="chalk-element"
+                  schedule={getSchedule(event)}
                   style={{ left: posX, top: posY }}
                 >
                   <div
@@ -544,7 +660,7 @@ export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) 
                       })}
                     </ul>
                   </div>
-                </div>
+                </ChalkItem>
               );
             }
 
@@ -553,9 +669,9 @@ export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) 
               const strokeColor = resolveChalkColor(svgEvent.strokeColor, '#F5F5DC');
 
               return (
-                <div
+                <ChalkItem
                   key={event.id}
-                  className="chalk-element"
+                  schedule={getSchedule(event)}
                   style={{ left: posX, top: posY }}
                 >
                   <svg width="220" height="220" className="chalk-svg-path">
@@ -568,7 +684,7 @@ export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) 
                       strokeLinejoin="round"
                     />
                   </svg>
-                </div>
+                </ChalkItem>
               );
             }
 
