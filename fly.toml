@@ -1,0 +1,33 @@
+# Fly.io — backend CenovIA (relay WebSocket + API REST)
+# O nome do app precisa ser único globalmente; ajuste se já estiver em uso.
+app = "cenovia-backend"
+primary_region = "gru" # São Paulo
+
+[build]
+  dockerfile = "packages/backend/Dockerfile"
+
+[env]
+  PORT = "3001"
+  NODE_ENV = "production"
+  GEMINI_MODEL = "gemini-3.8-live"
+  FREE_TIER_MINUTES_PER_MONTH = "30"
+  # Segredos (GEMINI_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY, CORS_ORIGIN)
+  # NÃO ficam aqui: use `fly secrets set` / `fly secrets import`.
+
+[http_service]
+  internal_port = 3001
+  force_https = true
+  auto_stop_machines = "stop"   # desliga quando não há conexões
+  auto_start_machines = true    # acorda na primeira conexão
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/api/health"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "15s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
