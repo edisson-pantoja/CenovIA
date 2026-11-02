@@ -3,6 +3,9 @@
 // Usados pelo backend (Node.js) e pelo mobile (Expo)
 // ============================================================
 
+export * from './curriculum';
+import type { StudentGender } from './curriculum';
+
 // -----------------------------------------------------------
 // Currículo / Matérias
 // -----------------------------------------------------------
@@ -31,11 +34,17 @@ export interface SubjectOption {
 
 export interface StudyContext {
   level: EducationLevel;
-  gradeId?: string;     // Fundamental/Médio
+  gradeId?: string;     // Fundamental/Médio: 'ef1'...'ef9', 'em1'...'em3'
   gradeLabel: string;   // "1ª Série do Ensino Médio"
   course?: string;      // Superior: nome do curso
   subjectId?: string;
   subjectName: string;  // "Química Orgânica"
+  isCustomSubject?: boolean; // matéria digitada em "Outra"
+  focusTheme?: string;  // tema da BNCC escolhido para a aula (opcional)
+  // Perfil do aluno
+  studentName?: string;
+  studentGender?: StudentGender;
+  studentAge?: number;  // idade ideal pelo ano escolar (corte do MEC)
 }
 
 export interface StudySession {

@@ -1524,9 +1524,11 @@ export default function ClassroomScreen() {
             {/* Card: Aluno (vídeo real da câmera ou avatar com botão para ligar) */}
             <div className="student-pip-card">
               <div className="student-pip-header">
-                <div className="student-avatar-icon">A</div>
+                <div className="student-avatar-icon">{(studyContext?.studentName?.[0] || 'A').toUpperCase()}</div>
                 <div className="student-pip-info">
-                  <span className="student-pip-name">Aluno</span>
+                  <span className="student-pip-name">
+                    {studyContext?.studentName?.split(' ')[0] || (studyContext?.studentGender === 'feminino' ? 'Aluna' : 'Aluno')}
+                  </span>
                   <div className="student-pip-status" style={{ color: cameraOn ? '#10b981' : '#94a3b8' }}>
                     <span className={`cam-dot ${cameraOn ? '' : 'student-cam-dot-off'}`} />
                     <span>{cameraOn ? 'Câmera ativa' : 'Câmera desligada'}</span>
@@ -1538,7 +1540,7 @@ export default function ClassroomScreen() {
                   <video ref={videoRef} className="student-video" muted playsInline />
                 ) : (
                   <div className="student-cam-off">
-                    <div className="student-cam-off-circle">{(user?.email?.[0] || 'A').toUpperCase()}</div>
+                    <div className="student-cam-off-circle">{(studyContext?.studentName?.[0] || user?.email?.[0] || 'A').toUpperCase()}</div>
                     <button className="student-cam-on-btn" onClick={startCamera}>Ligar câmera</button>
                   </div>
                 )}
