@@ -83,17 +83,29 @@ const ChalkHand = () => (
 
 interface ChalkItemProps {
   schedule: Schedule;
-  style: React.CSSProperties;
+  style?: React.CSSProperties;
   children: React.ReactNode;
+  /** Chamado quando a mão começa a escrever este elemento (usado para rolar o quadro até ele) */
+  onStartWriting?: (el: HTMLElement) => void;
+  /** Tipo visual do elemento (controla o espaçamento ao redor) */
+  kind?: 'title' | 'text' | 'latex' | 'note' | 'svg';
 }
 
 /** Revela o conteúdo da esquerda para a direita enquanto uma mão com giz acompanha o traço */
-function ChalkItem({ schedule, children }: ChalkItemProps) {
+function ChalkItem({ schedule, children, onStartWriting, kind = 'text' }: ChalkItemProps) {
   const timing = `${schedule.dur}ms linear ${schedule.delay}ms both`;
   const handTiming = `${schedule.dur}ms linear ${schedule.delay}ms forwards`;
   return (
-    <div className="chalk-element">
-      <div className="chalk-reveal" style={{ animation: `chalkWriteReveal ${timing}` }}>
+    <div className={`chalk-element chalk-element--${kind}`}>
+      <div
+        className="chalk-reveal"
+        style={{ animation: `chalkWriteReveal ${timing}` }}
+        onAnimationStart={(e) => {
+          if (e.target !== e.currentTarget) return;
+          const parent = e.currentTarget.parentElement;
+          if (parent && onStartWriting) onStartWriting(parent);
+        }}
+      >
         {children}
       </div>
       <div className="chalk-hand-track" style={{ animation: `chalkHandMove ${handTiming}` }}>
@@ -107,6 +119,7 @@ export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) 
   const scheduleRef = useRef<Map<string, Schedule>>(new Map());
   const queueEndRef = useRef(0);
   const lastClearSeenRef = useRef(-1);
+  const flowRef = useRef<HTMLDivElement | null>(null);
   const [selectedTool, setSelectedTool] = useState<'pen' | 'chalk' | 'eraser' | 'text' | 'shapes'>('chalk');
   const [isClearing, setIsClearing] = useState(false);
 
@@ -144,14 +157,26 @@ export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) 
       : visibleEvents;
   }, [visibleEvents, lastClearIndex]);
 
-  // Transição suave ao limpar
+  // Transição suave ao limpar (e volta o quadro para o topo)
   useEffect(() => {
+    if (flowRef.current) flowRef.current.scrollTop = 0;
     if (lastClearIndex >= 0) {
       setIsClearing(true);
       const timer = setTimeout(() => setIsClearing(false), 300);
       return () => clearTimeout(timer);
     }
   }, [lastClearIndex]);
+
+  /** Rola o quadro para que o elemento sendo escrito fique visível (nunca escreve fora da tela) */
+  const scrollToWriting = (el: HTMLElement) => {
+    const flow = flowRef.current;
+    if (!flow) return;
+    const bottom = el.offsetTop + el.offsetHeight;
+    const target = bottom - flow.clientHeight + 16;
+    if (target > flow.scrollTop) {
+      flow.scrollTo({ top: target, behavior: 'smooth' });
+    }
+  };
 
   // Agenda a escrita sequencial (um elemento por vez; novo clear zera a fila)
   if (lastClearSeenRef.current !== lastClearIndex) {
@@ -295,7 +320,8 @@ export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) 
           }
           100% {
             opacity: 1;
-            clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+            /* Margem extra: não corta descendentes (j, g, p), brilho nem o sublinhado */
+            clip-path: polygon(-8% -25%, 108% -25%, 108% 125%, -8% 125%);
             transform: translateY(0);
           }
         }
@@ -304,28 +330,49 @@ export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) 
           position: relative;
           z-index: 2;
           pointer-events: none;
-          width: calc(50% - 13px);
+          width: fit-content;
+          max-width: 100%;
+          min-width: 0;
+          flex-shrink: 0;
           box-sizing: border-box;
         }
 
-        /* Fluxo automático: os elementos entram em ordem de leitura e nunca se sobrepõem */
+        /* ── Espaçamento entre os elementos do quadro ── */
+        .chalk-element--title { margin-bottom: 14px; }          /* respiro entre título e primeira linha */
+        .chalk-element--title:not(:first-child) { margin-top: 18px; } /* novo bloco dentro da mesma tela */
+        .chalk-element--latex { margin: 4px 0; }
+        .chalk-element--note { margin-top: 18px; }             /* lembrete afastado do conteúdo */
+        .chalk-element--svg { margin: 8px 0; }
+
+        /* Fluxo automático: uma coluna, de cima para baixo, nunca sobrepõe; rola quando enche */
         .chalk-flow {
           position: absolute;
-          inset: 14px 22px;
+          inset: 0;
+          padding: 16px 22px 28px;
           display: flex;
           flex-direction: column;
-          flex-wrap: wrap;
-          align-content: flex-start;
-          gap: 12px 26px;
-          overflow: hidden;
+          flex-wrap: nowrap;
+          align-items: flex-start;
+          gap: 18px;
+          overflow-x: hidden;
+          overflow-y: auto;
           z-index: 2;
+          box-sizing: border-box;
+          scrollbar-width: thin;
+          scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+          overscroll-behavior: contain;
         }
+        .chalk-flow::-webkit-scrollbar { width: 6px; }
+        .chalk-flow::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.18); border-radius: 6px; }
 
         .chalk-note-box { max-width: 100%; box-sizing: border-box; min-width: 0; }
 
         .chalk-reveal {
-          display: inline-block;
+          display: block;
+          max-width: 100%;
         }
+
+        .chalk-reveal > div { max-width: 100%; }
 
         /* Mão com giz: acompanha a borda direita do texto sendo revelado */
         .chalk-hand-track {
@@ -368,6 +415,8 @@ export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) 
             0 0 2px rgba(255, 255, 255, 0.3);
           letter-spacing: 0.5px;
           display: inline-block;
+          max-width: 100%;
+          overflow-wrap: anywhere;
         }
 
         .chalk-title-item {
@@ -378,6 +427,8 @@ export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) 
             0 0 2px rgba(246, 226, 122, 0.6),
             0 0 6px rgba(246, 226, 122, 0.25);
           display: inline-block;
+          max-width: 100%;
+          overflow-wrap: anywhere;
           margin-bottom: 4px;
         }
 
@@ -394,7 +445,11 @@ export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) 
           color: #F5F5DC;
           font-size: clamp(22px, 2.4vw, 32px);
           filter: drop-shadow(0 0 1px rgba(255, 255, 255, 0.65));
-          display: inline-block;
+          display: block;
+          max-width: 100%;
+          overflow-x: auto;
+          overflow-y: hidden;
+          pointer-events: auto;
         }
 
         .chalk-latex-item .katex {
@@ -415,8 +470,8 @@ export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) 
             0 0 14px rgba(244, 166, 192, 0.15),
             inset 0 0 14px rgba(244, 166, 192, 0.05);
           padding: 14px 20px;
-          min-width: 260px;
-          max-width: 440px;
+          min-width: min(260px, 100%);
+          max-width: min(440px, 100%);
           color: #F4A6C0;
         }
 
@@ -457,6 +512,23 @@ export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) 
         /* SVG Paths geométricos (como o triângulo retângulo) */
         .chalk-svg-path {
           filter: drop-shadow(0 0 1.5px rgba(255, 255, 255, 0.6));
+          max-width: 100%;
+        }
+
+        /* ── Celular: sem barra de ferramentas, quadro ocupa toda a largura ── */
+        @media (max-width: 720px) {
+          .chalk-toolbar { display: none; }
+          .chalk-slate-container { padding: 6px; }
+          .chalk-slate { border-width: 4px; border-radius: 12px; }
+          .chalk-flow { padding: 12px 14px 24px; gap: 10px; }
+          .chalk-text-item { font-size: 21px; }
+          .chalk-title-item { font-size: 28px; }
+          .chalk-latex-item { font-size: 20px; }
+          .chalk-note-box { padding: 10px 14px; }
+          .chalk-note-box-title { font-size: 22px; }
+          .chalk-note-box-line { font-size: 18px; }
+          .chalk-hand { transform: translate(-6px, -2px) scale(0.75); }
+          .chalk-empty-watermark { font-size: 22px; }
         }
 
         /* Marca d'água discreta quando o quadro está vazio */
@@ -546,7 +618,7 @@ export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) 
           <div className="chalk-dust-overlay" />
 
           {/* Renderização dinâmica dos elementos recebidos do Gemini */}
-          <div className="chalk-flow">
+          <div className="chalk-flow" ref={flowRef}>
           {renderableEvents.map((event) => {
             const rawX = 'x' in event ? (event as any).x : 0.08;
             const rawY = 'y' in event ? (event as any).y : 0.12;
@@ -562,6 +634,8 @@ export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) 
                 <ChalkItem
                   key={event.id}
                   schedule={getSchedule(event)}
+                  onStartWriting={scrollToWriting}
+                  kind={isTitle ? 'title' : 'text'}
                   style={{ left: posX, top: posY }}
                 >
                   {isTitle ? (
@@ -615,6 +689,8 @@ export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) 
                 <ChalkItem
                   key={event.id}
                   schedule={getSchedule(event)}
+                  onStartWriting={scrollToWriting}
+                  kind="latex"
                   style={{
                     left: posX,
                     top: posY,
@@ -643,6 +719,8 @@ export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) 
                 <ChalkItem
                   key={event.id}
                   schedule={getSchedule(event)}
+                  onStartWriting={scrollToWriting}
+                  kind="note"
                   style={{ left: posX, top: posY }}
                 >
                   <div
@@ -690,6 +768,8 @@ export default function ChalkBoardWrapper({ events = [], replayTimeMs }: Props) 
                 <ChalkItem
                   key={event.id}
                   schedule={getSchedule(event)}
+                  onStartWriting={scrollToWriting}
+                  kind="svg"
                   style={{ left: posX, top: posY }}
                 >
                   <svg width="220" height="220" className="chalk-svg-path">

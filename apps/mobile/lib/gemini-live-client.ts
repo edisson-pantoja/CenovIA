@@ -19,6 +19,7 @@ export class GeminiLiveClient {
   private readonly maxReconnectAttempts = 3;
   private isIntentionalClose = false;
   private thinkTimeout: ReturnType<typeof setTimeout> | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   // ── Callbacks públicos ─────────────────────────────────────────────────────
 
@@ -84,7 +85,11 @@ export class GeminiLiveClient {
           this.reconnectAttempts++;
           const delay = this.reconnectAttempts * 2000;
           console.warn(`🔥 [DEBUG] Tentando reconectar em ${delay}ms...`);
-          setTimeout(() => {
+          if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+          this.reconnectTimer = setTimeout(() => {
+            this.reconnectTimer = null;
+            // O aluno pode ter encerrado a aula enquanto aguardávamos
+            if (this.isIntentionalClose) return;
             this.connect(token, context).catch(console.error);
           }, delay);
         }
@@ -168,18 +173,32 @@ export class GeminiLiveClient {
   /** Encerra a sessão e fecha o WebSocket de forma limpa */
   disconnect(): void {
     this.isIntentionalClose = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     if (this.thinkTimeout) {
       clearTimeout(this.thinkTimeout);
       this.thinkTimeout = null;
     }
     if (this.ws) {
-      if (this.ws.readyState === WebSocket.OPEN) {
-        const msg: ClientMessage = { type: 'session_end' };
-        this.ws.send(JSON.stringify(msg));
-      }
-      this.ws.close(1000, 'Sessão encerrada pelo aluno');
+      const ws = this.ws;
       this.ws = null;
+      // Evita que mensagens/fechamento tardios deste socket reativem a aula
+      ws.onmessage = null;
+      ws.onerror = null;
+      ws.onclose = null;
+      try {
+        if (ws.readyState === WebSocket.OPEN) {
+          const msg: ClientMessage = { type: 'session_end' };
+          ws.send(JSON.stringify(msg));
+        }
+        ws.close(1000, 'Sessão encerrada pelo aluno');
+      } catch (err) {
+        console.warn('[GEMINI-CLIENT] Erro ao fechar socket:', err);
+      }
     }
+    this.onDisconnected();
   }
 
   get isConnected(): boolean {

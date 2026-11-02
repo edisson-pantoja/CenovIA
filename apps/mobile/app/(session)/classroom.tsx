@@ -58,7 +58,13 @@ export default function ClassroomScreen() {
   const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'info' | 'warning' | 'error' } | null>(null);
   const [studyPlan, setStudyPlan] = useState<StudyPlanState | null>(null);
-  const [planOpen, setPlanOpen] = useState(true);
+  const isMobileViewport = () =>
+    Platform.OS === 'web' && typeof window !== 'undefined' && window.matchMedia?.('(max-width: 720px)').matches;
+  // No celular o plano de estudos começa escondido (vira uma gaveta aberta pelo botão "Tópicos")
+  const [planOpen, setPlanOpen] = useState(() => !isMobileViewport());
+  const [isEnding, setIsEnding] = useState(false);
+  const [videoHidden, setVideoHidden] = useState(false);
+  const sessionEndedRef = useRef(false);
 
   // Temporizador da sessão
   const sessionStartRef = useRef<number>(Date.now());
@@ -108,13 +114,17 @@ export default function ClassroomScreen() {
     };
 
     geminiClient.onSessionReady = (_sessionId, updatedUsage) => {
+      if (sessionEndedRef.current) return;
       setIsConnected(true);
       setUsage(updatedUsage);
       setTeacherState('idle');
-      sessionStartRef.current = Date.now();
-      durationTimerRef.current = setInterval(() => {
-        setSessionDurationMs(Date.now() - sessionStartRef.current);
-      }, 1000);
+      // Inicia o cronômetro só uma vez: reconexões não zeram o tempo nem empilham intervalos
+      if (!durationTimerRef.current) {
+        sessionStartRef.current = Date.now();
+        durationTimerRef.current = setInterval(() => {
+          setSessionDurationMs(Date.now() - sessionStartRef.current);
+        }, 1000);
+      }
     };
 
     geminiClient.onAudioChunk = async (data, timestampMs) => {
@@ -148,6 +158,10 @@ export default function ClassroomScreen() {
     geminiClient.onUsageLimitReached = () => {
       setUsageLimitReached(true);
       setIsConnected(false);
+      if (durationTimerRef.current) {
+        clearInterval(durationTimerRef.current);
+        durationTimerRef.current = null;
+      }
       showToast('Limite de minutos atingido (30 min gratuitos este mês).', 'error');
     };
 
@@ -230,19 +244,57 @@ export default function ClassroomScreen() {
     };
   }, [cameraOn]);
 
+  const stopDurationTimer = () => {
+    if (durationTimerRef.current) {
+      clearInterval(durationTimerRef.current);
+      durationTimerRef.current = null;
+    }
+  };
+
   const handleEndSession = () => {
-    stopCamera();
-    geminiClient.disconnect();
-    audioManager.cleanup();
-    if (durationTimerRef.current) clearInterval(durationTimerRef.current);
-    // Na web não há histórico para voltar: vai direto para a escolha de matéria
-    router.replace('/(auth)/onboarding');
+    if (isEnding) return;
+    sessionEndedRef.current = true;
+    setIsEnding(true);
+    setSettingsOpen(false);
+
+    // 1. Para o cronômetro imediatamente (o tempo congela no valor atual)
+    stopDurationTimer();
+    setSessionDurationMs(Date.now() - sessionStartRef.current);
+
+    // 2. Encerra microfone, câmera, áudio e conexão (cada passo isolado para um erro não travar os outros)
+    try {
+      if (isRecording && Platform.OS === 'web') Promise.resolve(webAudioRecorder.stop()).catch(() => {});
+    } catch { /* ignora */ }
+    try { stopCamera(); } catch { /* ignora */ }
+    try { geminiClient.disconnect(); } catch (err) { console.warn('[CLASSROOM] disconnect falhou', err); }
+    try { audioManager.cleanup(); } catch { /* ignora */ }
+    setIsConnected(false);
+    setIsRecording(false);
+    setTeacherState('idle');
+
+    // 3. Volta para a escolha de matéria
+    try {
+      router.replace('/(auth)/onboarding');
+    } catch (err) {
+      console.warn('[CLASSROOM] router.replace falhou', err);
+    }
+    // Fallback na web: se o roteador não saiu da tela de aula, navega pela URL
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      setTimeout(() => {
+        if (window.location.pathname.includes('classroom')) {
+          window.location.assign('/onboarding');
+        }
+      }, 700);
+    }
   };
 
   const handleSignOut = async () => {
+    sessionEndedRef.current = true;
+    stopDurationTimer();
     stopCamera();
     geminiClient.disconnect();
     audioManager.cleanup();
+    setSettingsOpen(false);
     await signOut();
     router.replace('/(auth)/welcome');
   };
@@ -376,6 +428,7 @@ export default function ClassroomScreen() {
             flex-direction: column;
             width: 100%;
             height: 100vh;
+            height: 100dvh;
             background-color: #0b131a;
             color: #ffffff;
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -1170,6 +1223,97 @@ export default function ClassroomScreen() {
             cursor: not-allowed;
             box-shadow: none;
           }
+
+          .header-end-btn:disabled { opacity: 0.6; cursor: wait; }
+
+          /* Botões que só aparecem no celular */
+          .mobile-only { display: none !important; }
+          .study-backdrop { display: none; }
+
+          .header-icon-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #e2e8f0;
+            font-size: 12px;
+            font-weight: 600;
+            height: 34px;
+            min-width: 34px;
+            padding: 0 10px;
+            border-radius: 10px;
+            cursor: pointer;
+          }
+          .header-icon-btn.active { background: rgba(59, 130, 246, 0.2); border-color: rgba(59, 130, 246, 0.55); }
+
+          /* ── CELULAR ── */
+          @media (max-width: 720px) {
+            .mobile-only { display: flex !important; }
+            .desktop-only { display: none !important; }
+
+            /* Header compacto: marca + tempo à esquerda, ações à direita, nunca transborda */
+            .cenovia-header { height: 52px; padding: 0 10px; gap: 8px; }
+            .header-left { gap: 8px; min-width: 0; flex: 1; overflow: hidden; }
+            .header-brand-icon, .header-brand-subtitle, .header-separator, .header-live-badge span:last-child { display: none; }
+            .header-brand-name { font-size: 14px; white-space: nowrap; }
+            .header-live-badge { margin-left: 0; }
+            .header-right { gap: 6px; flex-shrink: 0; }
+            .header-settings-btn { padding: 0; width: 34px; height: 34px; justify-content: center; }
+            .header-settings-btn span { display: none; }
+            .header-end-btn { padding: 8px 12px; }
+
+            /* Plano de estudos: gaveta lateral que se esconde por completo */
+            .study-panel {
+              position: fixed;
+              top: 0;
+              bottom: 0;
+              left: 0;
+              width: min(82vw, 300px) !important;
+              z-index: 160;
+              transform: translateX(0);
+              transition: transform 0.25s ease;
+              box-shadow: 8px 0 30px rgba(0, 0, 0, 0.5);
+            }
+            .study-panel.collapsed { transform: translateX(-105%); box-shadow: none; }
+            .study-backdrop {
+              display: block;
+              position: fixed;
+              inset: 0;
+              background: rgba(2, 6, 12, 0.6);
+              z-index: 150;
+            }
+
+            /* Faixa de vídeo enxuta (sem nada flutuando sobre o quadro) */
+            .cenovia-body-split .teacher-video-container {
+              height: 104px;
+              padding: 6px 8px;
+              gap: 8px;
+            }
+            .cenovia-body-split.video-hidden .teacher-video-container { display: none; }
+            .teacher-video-frame { border-radius: 10px; }
+            .teacher-video-frame .teacher-cam-badge { top: 4px; left: 4px; padding: 2px 6px; font-size: 10px; gap: 4px; }
+            .teacher-video-frame .teacher-cam-badge svg,
+            .teacher-video-frame .teacher-cam-badge span:nth-of-type(1) { display: none; }
+            .cenovia-body-split .student-pip-card { border-radius: 10px; }
+            .student-pip-header { padding: 4px 8px; }
+            .student-avatar-icon { display: none; }
+            .student-cam-off { flex-direction: row; gap: 6px; }
+            .student-cam-off-circle { width: 28px; height: 28px; font-size: 13px; }
+            .replay-wrapper { display: none; }
+
+            /* Barra inferior: só ícones, cabe em 360px */
+            .cenovia-chat-bar { height: 58px; padding: 0 8px; gap: 6px; padding-bottom: env(safe-area-inset-bottom); }
+            .chat-action-btn { padding: 0; width: 40px; height: 40px; justify-content: center; border-radius: 12px; flex-shrink: 0; }
+            .chat-action-btn .btn-label, .chat-send-btn .btn-label, .chat-emoji-btn { display: none; }
+            .chat-input-wrapper { min-width: 0; height: 40px; padding: 0 12px; }
+            .chat-input-field { font-size: 16px; min-width: 0; }
+            .chat-ptt-btn { width: 40px; height: 40px; flex-shrink: 0; }
+            .chat-send-btn { padding: 0; width: 40px; height: 40px; justify-content: center; border-radius: 50%; flex-shrink: 0; }
+
+            .cenovia-toast-container { top: 58px; font-size: 12px; }
+          }
         `}</style>
 
         {/* ── Input oculto para upload de imagem da câmera/exercício ── */}
@@ -1210,6 +1354,26 @@ export default function ClassroomScreen() {
           </div>
 
           <div className="header-right">
+            <button
+              className={`header-icon-btn mobile-only ${planOpen ? 'active' : ''}`}
+              onClick={() => setPlanOpen((v) => !v)}
+              title="Plano de estudos"
+              aria-label="Abrir plano de estudos"
+            >
+              ☰
+            </button>
+            <button
+              className={`header-icon-btn mobile-only ${videoHidden ? '' : 'active'}`}
+              onClick={() => setVideoHidden((v) => !v)}
+              title={videoHidden ? 'Mostrar vídeo' : 'Esconder vídeo para ampliar o quadro'}
+              aria-label="Mostrar ou esconder vídeo"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polygon points="23 7 16 12 23 17 23 7" />
+                <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+                {videoHidden && <line x1="2" y1="2" x2="22" y2="22" />}
+              </svg>
+            </button>
             <button className="header-settings-btn" title="Configurações" onClick={() => setSettingsOpen(true)}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <circle cx="12" cy="12" r="3" />
@@ -1218,7 +1382,13 @@ export default function ClassroomScreen() {
               <span>Configurações</span>
             </button>
 
-            <button className="header-end-btn" onClick={handleEndSession} title="Encerrar Aula">
+            <button
+              type="button"
+              className="header-end-btn"
+              onClick={handleEndSession}
+              disabled={isEnding}
+              title="Encerrar Aula"
+            >
               <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5 11h-4v4h-2v-4H7v-2h4V7h2v4h4v2z" transform="rotate(45 12 12)" />
               </svg>
@@ -1262,6 +1432,9 @@ export default function ClassroomScreen() {
 
         {/* ── 2. Linha principal: Painel de tópicos + (Vídeo Professora / Quadro Verde) ── */}
         <div className="cenovia-main-row">
+        {planOpen && (
+          <div className="study-backdrop" onClick={() => setPlanOpen(false)} aria-hidden="true" />
+        )}
         <aside className={`study-panel ${planOpen ? '' : 'collapsed'}`} aria-label="Plano de estudos">
           <div className="study-panel-header">
             <span className="study-panel-title">Plano de estudos</span>
@@ -1289,6 +1462,7 @@ export default function ClassroomScreen() {
                     <button
                       className={`study-topic ${t.done ? 'done' : ''} ${t.id === studyPlan.currentTopicId ? 'current' : ''}`}
                       onClick={() => {
+                        if (isMobileViewport()) setPlanOpen(false);
                         if (!isConnected) return;
                         geminiClient.sendTextMessage(`Quero ir para o tópico "${t.title}" do plano de estudos.`);
                       }}
@@ -1309,7 +1483,7 @@ export default function ClassroomScreen() {
         </aside>
 
         {/* ── Corpo Split (50% Vídeo Professora / 50% Quadro Verde) ── */}
-        <div className="cenovia-body-split">
+        <div className={`cenovia-body-split ${videoHidden ? 'video-hidden' : ''}`}>
 
           {/* ── Metade Superior: Vídeo da Professora + PIP do Aluno ── */}
           <section className="teacher-video-container" aria-label="Transmissão da professora">
@@ -1373,6 +1547,7 @@ export default function ClassroomScreen() {
 
             {/* Player de Replay (se houver buffer) */}
             {audioManager.getTotalBufferedDuration() > 0 && (
+              <div className="replay-wrapper">
               <AudioReplayPlayer
                 totalDurationMs={audioManager.getTotalBufferedDuration()}
                 currentTimeMs={replayTimeMs ?? audioManager.getTotalBufferedDuration()}
@@ -1380,6 +1555,7 @@ export default function ClassroomScreen() {
                 onSeek={handleSeek}
                 onGoLive={handleReplayEnd}
               />
+              </div>
             )}
           </section>
 
@@ -1406,11 +1582,11 @@ export default function ClassroomScreen() {
               <circle cx="8.5" cy="8.5" r="1.5" />
               <polyline points="21 15 16 10 5 21" />
             </svg>
-            <span>{isUploadingImage ? 'Enviando...' : 'Enviar imagem'}</span>
+            <span className="btn-label">{isUploadingImage ? 'Enviando...' : 'Enviar imagem'}</span>
           </button>
 
           <button
-            className="chat-action-btn"
+            className="chat-action-btn desktop-only"
             onClick={handleTriggerImageUpload}
             title="Anexar arquivo"
           >
@@ -1447,16 +1623,17 @@ export default function ClassroomScreen() {
               <polygon points="23 7 16 12 23 17 23 7" />
               <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
             </svg>
-            <span>{cameraOn ? 'Desligar câmera' : 'Câmera'}</span>
+            <span className="btn-label">{cameraOn ? 'Desligar câmera' : 'Câmera'}</span>
           </button>
 
           {/* Botão Push-to-Talk (Microfone) */}
           <button
             className={`chat-ptt-btn ${isRecording ? 'recording' : ''}`}
-            onMouseDown={handlePTTStart}
-            onMouseUp={handlePTTEnd}
-            onTouchStart={handlePTTStart}
-            onTouchEnd={handlePTTEnd}
+            onPointerDown={(e) => { e.preventDefault(); handlePTTStart(); }}
+            onPointerUp={handlePTTEnd}
+            onPointerCancel={handlePTTEnd}
+            onContextMenu={(e) => e.preventDefault()}
+            style={{ touchAction: 'none' }}
             title="Segure para falar com a Profa. Ana"
           >
             {isRecording ? '🔴' : '🎤'}
@@ -1472,7 +1649,7 @@ export default function ClassroomScreen() {
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
               <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
             </svg>
-            <span>Enviar</span>
+            <span className="btn-label">Enviar</span>
           </button>
         </footer>
 

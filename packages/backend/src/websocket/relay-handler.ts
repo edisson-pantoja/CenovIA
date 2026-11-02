@@ -17,6 +17,8 @@ export const handleRelayConnection = (clientWs: WebSocket, request: IncomingMess
   let reconnectTimeout: NodeJS.Timeout | null = null;
   let isAuthenticated = false;
   let hasInputInCurrentTurn = false;
+  /** true após cada nova fala/mensagem do aluno: o 1º draw_board da resposta começa com o quadro limpo */
+  let freshBoardForNextDraw = false;
   let studyContext: any = null;
   let sessionStartMs = Date.now();
   let resumptionHandle: string | null = null;
@@ -106,7 +108,7 @@ Responda SEMPRE em português do Brasil, com linguagem clara, acolhedora e adequ
 Quando explicar algo que precisa de visualização, fórmulas ou anotações, use SEMPRE a ferramenta draw_board.
 Regras fundamentais de uso do quadro verde:
 - Sempre que for começar uma nova explicação, mudar de tópico ou responder uma nova dúvida do aluno, use SEMPRE clear: true para apagar o quadro anterior antes de escrever.
-- O quadro organiza o layout SOZINHO: os elementos são dispostos em ordem de leitura, em duas colunas, sem sobreposição. Não se preocupe com x e y (pode omiti-los). O que importa é a ORDEM em que você envia os elementos.
+- O quadro organiza o layout SOZINHO: os elementos são dispostos em ordem de leitura, de cima para baixo, sem sobreposição. Não se preocupe com x e y (pode omiti-los). O que importa é a ORDEM em que você envia os elementos.
 - Seja ECONÔMICA no quadro: no máximo 5 elementos por tela (1 título, até 3 textos/fórmulas curtos e, se couber, 1 note_box curto). Cada texto com no máximo ~100 caracteres. Se precisar de mais, use clear: true e escreva uma nova tela.
 - Toda fórmula matemática vai como kind: 'latex' (escreva o código LaTeX sem cifrões $).
 - Use kind: 'title' amarelo para o tema da explicação (sempre o primeiro elemento da tela).
@@ -323,6 +325,11 @@ PLANO DE ESTUDOS (obrigatório, use a ferramenta study_plan):
             if (fc.name === 'draw_board') {
               console.log('[RELAY] draw_board function call:', JSON.stringify(fc.args));
               const events = normalizeBoardCall(fc.args, sessionStartMs);
+              // A IA nem sempre manda clear:true ao responder uma nova dúvida — garantimos aqui
+              if (freshBoardForNextDraw && events.length > 0 && events[0].type !== 'clear') {
+                events.unshift({ id: `auto-clear-${Date.now()}`, type: 'clear', timestampMs: events[0].timestampMs });
+              }
+              if (events.length > 0) freshBoardForNextDraw = false;
               for (const ev of events) {
                 clientWs.send(JSON.stringify({ type: 'board_event', event: ev }));
               }
@@ -462,6 +469,7 @@ PLANO DE ESTUDOS (obrigatório, use a ferramenta study_plan):
         } else if (msg.type === 'turn_complete') {
           hasInputInCurrentTurn = false;
           if (pttStarted) {
+            freshBoardForNextDraw = true;
             console.log('[RELAY] PTT End -> activityEnd');
             geminiWs.send(JSON.stringify({
               realtimeInput: { activityEnd: {} }
@@ -483,6 +491,7 @@ PLANO DE ESTUDOS (obrigatório, use a ferramenta study_plan):
 
         } else if (msg.type === 'text_message') {
           hasInputInCurrentTurn = false;
+          freshBoardForNextDraw = true;
           geminiWs.send(JSON.stringify({
             clientContent: {
               turns: [{ role: 'user', parts: [{ text: msg.text }] }],
@@ -493,6 +502,7 @@ PLANO DE ESTUDOS (obrigatório, use a ferramenta study_plan):
         } else if (msg.type === 'image_message') {
           console.log('[RELAY] Imagem recebida do aluno');
           hasInputInCurrentTurn = false;
+          freshBoardForNextDraw = true;
           const mimeType = msg.mimeType || 'image/jpeg';
           const promptText = msg.text || 'Analise a imagem da anotação/exercício enviada e ajude a explicar e resolver no quadro verde.';
 
